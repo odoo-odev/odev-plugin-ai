@@ -69,6 +69,7 @@ class LLM:
                     messages=messages,
                     api_key=self.api_key,
                     response_format=response_format,
+                    verbose=False,
                 )
                 logger.info(f"Successfully received a response from {model_name}.")
 

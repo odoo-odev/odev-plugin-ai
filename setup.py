@@ -14,17 +14,15 @@ def setup(odev: Odev) -> None:
     # The `console.select` returns the value from the (value, display_name) tuple.
     # The LLM class expects the provider name to be capitalized (e.g., "Gemini").
     choices = sorted((name, name) for name in LLM_LIST.keys())
-    default_llm = "Gemini" if "Gemini" in LLM_LIST else (choices[0][0] if choices else None)
-
-    if not default_llm:
-        logger.error("No LLMs are configured in LLM_LIST. Cannot proceed with AI setup.")
-        return
 
     llm_name = console.select(
         "Which LLM do you want to use?",
         choices,
-        default_llm,
+        list(LLM_LIST.keys())[0],
     )
+
+    if llm_name is None:
+        raise ValueError("No LLM selected. Please select a valid LLM provider.")
 
     odev.config.set("ai", "default_llm", llm_name)
 
