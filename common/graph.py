@@ -1,4 +1,3 @@
-import ast
 from pathlib import Path
 from typing import (
     Any,
@@ -10,40 +9,13 @@ from typing import (
 
 import networkx as nx
 
+from odev.common import string
 from odev.common.console import console
 from odev.common.logging import logging
 from odev.common.odoobin import OdoobinProcess
 
 
 logger = logging.getLogger(__name__)
-
-
-def _read_manifest(manifest_path: Path) -> Optional[Dict[str, Any]]:
-    """
-    Reads an Odoo manifest file and returns its content as a dictionary.
-
-    This function safely parses the `__manifest__.py` file, which is a Python
-    file containing a dictionary, and extracts this dictionary.
-
-    :param manifest_path: The path to the __manifest__.py file.
-    :return: A dictionary with the manifest content, or None if the file
-             cannot be read or parsed.
-    """
-    if not manifest_path.is_file():
-        return None
-    try:
-        content: str = manifest_path.read_text(encoding="utf-8")
-        # An Odoo manifest is a Python file that should contain a dictionary literal.
-        # We parse the file content into an Abstract Syntax Tree (AST)
-        # and look for the first dictionary node.
-        tree: ast.AST = ast.parse(content, filename=manifest_path.name)
-        dict_node = next((node for node in ast.walk(tree) if isinstance(node, ast.Dict)), None)
-        if dict_node:
-            # ast.literal_eval can safely evaluate a node if it's a literal structure.
-            return ast.literal_eval(dict_node)
-    except (ValueError, SyntaxError) as e:
-        logger.error(f"Could not parse manifest file {manifest_path}: {e}")
-    return None
 
 
 def _get_module_path(process: OdoobinProcess, module_name: str) -> Optional[Path]:
@@ -59,7 +31,7 @@ def _get_module_path(process: OdoobinProcess, module_name: str) -> Optional[Path
     # Any necessary updates should be performed before calling this graph builder.
     for addons_path in process.odoo_addons_paths:
         module_path: Path = addons_path / module_name
-        if module_path.is_dir() and (module_path / "__manifest__.py").exists():
+        if OdoobinProcess.check_addons_path(module_path):
             return module_path
     return None
 
@@ -93,7 +65,7 @@ def build_dependency_tree(process: OdoobinProcess, modules: List[str]) -> nx.DiG
             logger.warning(f"Module '{module_name}' not found in standard Odoo repositories.")
             continue
 
-        manifest: Optional[Dict[str, Any]] = _read_manifest(module_path / "__manifest__.py")
+        manifest: Optional[Dict[str, Any]] = process.read_manifest(module_path / "__manifest__.py")
         if manifest and "depends" in manifest:
             dependencies: List[str] = manifest.get("depends", [])
             for dependency in dependencies:
@@ -111,21 +83,21 @@ def print_dependency_tree(graph: nx.DiGraph, modules: List[str]) -> None:
     :param graph: The dependency graph, as returned by `build_dependency_tree`.
     :param modules: The list of initial modules to highlight in the output.
     """
-    console.print(f"\n[bold underline]Dependency Tree for: {', '.join(modules)}[/bold underline]\n")
+    console.print(string.stylize(f"\nDependency Tree for: {', '.join(modules)}\n", "bold underline"))
 
     sorted_modules: List[str] = sorted(graph.nodes())
 
     for module in sorted_modules:
         dependencies: List[str] = sorted(graph.predecessors(module))
         if dependencies:
-            console.print(f"  [bold cyan]{module}[/bold cyan] -> {', '.join(dependencies)}")
+            console.print(f"  {string.stylize(module, 'bold cyan')} -> {', '.join(dependencies)}")
 
     try:
         installation_order: List[str] = list(nx.topological_sort(graph))
-        console.print("\n[bold underline]Installation Order (Topological Sort):[/bold underline]\n")
+        console.print(f"\n{string.stylize('Installation Order (Topological Sort):', 'bold underline')}\n")
         for module in installation_order:
             console.print(f"  - {module}")
     except nx.NetworkXUnfeasible:
         console.print(
-            "\n[bold red]Error: Circular dependency detected, cannot determine installation order.[/bold red]"
+            f"\n{string.stylize('Error: Circular dependency detected, cannot determine installation order.', 'bold red')}"
         )

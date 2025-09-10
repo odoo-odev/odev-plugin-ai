@@ -38,7 +38,6 @@ def setup(odev: Odev) -> None:
         )
     )
 
-    llm_api_key = console.text(f"Enter your {llm_name} API key:")
-    odev.config.set("ai", "llm_api_key", llm_api_key)
+    odev.store.secrets.get("llm api key", scope="api", fields=["password"], prompt_format="Enter your LLM API Key:")
 
     logger.info("AI plugin configured successfully.")

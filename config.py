@@ -6,7 +6,7 @@ class AiSection(Section):
 
     @property
     def default_llm(self) -> str:
-        """Test config parameter."""
+        """Default LLM."""
         return self.get("default_llm", "Gemini")
 
     @default_llm.setter
@@ -15,7 +15,7 @@ class AiSection(Section):
 
     @property
     def llm_api_key(self) -> str:
-        """Test config parameter."""
+        """Default LLM API key."""
         return self.get("llm_api_key", None)
 
     @llm_api_key.setter
