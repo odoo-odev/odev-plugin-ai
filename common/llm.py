@@ -62,6 +62,7 @@ class LLM:
         for model_name in model_list:
             try:
                 logger.debug(f"Attempting completion with model: {model_name}")
+                litellm.suppress_debug_info = True
 
                 response: ModelResponse = litellm.completion(  # type: ignore
                     model=model_name,
