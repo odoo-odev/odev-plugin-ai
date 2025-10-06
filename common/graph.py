@@ -1,10 +1,11 @@
 from pathlib import Path
 from typing import (
     Any,
-    Dict,
     List,
+    Mapping,
     Optional,
     Set,
+    Tuple,
 )
 
 import networkx as nx
@@ -29,49 +30,53 @@ def _get_module_path(process: OdoobinProcess, module_name: str) -> Optional[Path
     # The OdoobinProcess provides the necessary addons paths.
     # `update_worktrees` was called here, but it does not exist on OdoobinProcess.
     # Any necessary updates should be performed before calling this graph builder.
-    for addons_path in process.odoo_addons_paths:
+    for addons_path in process.addons_paths:
         module_path: Path = addons_path / module_name
-        if OdoobinProcess.check_addons_path(module_path):
+        if OdoobinProcess.check_addon_path(module_path):
             return module_path
     return None
 
 
-def build_dependency_tree(process: OdoobinProcess, modules: List[str]) -> nx.DiGraph:
+def build_dependency_tree(process: OdoobinProcess, modules: List[str], max_level: int = 1) -> nx.DiGraph:
     """
     Build a dependency tree for a list of Odoo modules.
 
     This method parses modules from the standard Odoo repositories (odoo,
     enterprise, design-themes), reads their manifests to find dependencies,
-    and recursively builds a dependency graph.
+    and recursively builds a dependency graph up to a certain level.
 
     :param process: The OdoobinProcess instance to use for finding modules.
     :param modules: A list of module names to build the dependency tree from.
+    :param max_level: The maximum depth of dependencies to traverse. Defaults to 1.
     :return: A networkx.DiGraph representing the dependency tree.
     """
     graph: nx.DiGraph = nx.DiGraph()
-    to_process: List[str] = list(modules)
+    to_process: List[Tuple[str, int]] = [(m, 0) for m in modules]
     processed: Set[str] = set()
 
     while to_process:
-        module_name: str = to_process.pop(0)
+        module_name, level = to_process.pop(0)
         if module_name in processed:
             continue
 
         processed.add(module_name)
         graph.add_node(module_name)
 
+        if max_level is not None and level >= max_level:
+            continue
+
         module_path: Optional[Path] = _get_module_path(process, module_name)
         if not module_path:
             logger.warning(f"Module '{module_name}' not found in standard Odoo repositories.")
             continue
 
-        manifest: Optional[Dict[str, Any]] = process.read_manifest(module_path / "__manifest__.py")
+        manifest: Optional[Mapping[str, Any]] = process.read_manifest(module_path / "__manifest__.py")
         if manifest and "depends" in manifest:
             dependencies: List[str] = manifest.get("depends", [])
             for dependency in dependencies:
                 graph.add_edge(dependency, module_name)
                 if dependency not in processed:
-                    to_process.append(dependency)
+                    to_process.append((dependency, level + 1))
 
     return graph
 
