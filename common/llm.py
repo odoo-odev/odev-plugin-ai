@@ -1,7 +1,7 @@
 from typing import Dict, List, Optional
 
 import litellm
-from litellm import InternalServerError, ModelResponse
+from litellm import InternalServerError, ModelResponse, token_counter
 
 from odev.common.logging import logging
 
@@ -60,6 +60,7 @@ class LLM:
             return None
 
         for model_name in model_list:
+            logger.debug(f"Token counter : {token_counter(model=model_name, messages=messages)} tokens")
             try:
                 logger.debug(f"Attempting completion with model: {model_name}")
                 litellm.suppress_debug_info = True
@@ -72,6 +73,13 @@ class LLM:
                     verbose=False,
                 )
                 logger.info(f"Successfully received a response from {model_name}.")
+
+                if response.usage:
+                    logger.debug(
+                        f"LLM Usage: {response.usage.prompt_tokens} prompt, "
+                        f"{response.usage.completion_tokens} completion, "
+                        f"{response.usage.total_tokens} total tokens."
+                    )
 
                 # Callers expect the string content of the message.
                 if response.choices and response.choices[0].message.content:  # type: ignore
