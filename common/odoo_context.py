@@ -346,6 +346,6 @@ class OdooContext:
         """Gathers all XML data files from the 'data' directory."""
         data_dir = module_path / "data"
         if data_dir.is_dir():
-            for data_file in data_dir.glob("*.xml"):
-                if data_file.is_file():
+            for data_file in data_dir.iterdir():
+                if data_file.is_file() and (data_file.name.endswith(".csv") or data_file.name.endswith(".xml")):
                     context[module_name]["data"].append({"path": str(data_file), "content": data_file.read_text()})

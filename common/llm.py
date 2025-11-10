@@ -26,35 +26,43 @@ class LLM:
 
     provider: str
     api_key: str
+    model: Optional[str] = None
 
-    def __init__(self, provider: Optional[str] = None, api_key: Optional[str] = None):
+    def __init__(self, model_identifier: Optional[str] = None, api_key: Optional[str] = None):
         """
         Initializes the LLM client.
 
-        :param provider: The name of the LLM provider (e.g., "Gemini", "ChatGPT").
-                         This must match a key in the `LLM_LIST`.
+        :param model_identifier: The name of the LLM provider (e.g., "Gemini", "ChatGPT") or a specific model
+                                 identifier (e.g., "gemini/gemini-1.5-pro"). If a provider is given, it must
+                                 match a key in `LLM_LIST`.
         :param api_key: The API key for the specified provider.
         :raises ValueError: If the provider or API key is not provided.
         """
-        if not provider:
+        if not model_identifier:
             raise ValueError("An LLM provider must be configured.")
         if not api_key:
             raise ValueError("An LLM API key must be configured.")
 
-        self.provider = provider
+        if "/" in model_identifier:
+            self.provider = model_identifier.split("/")[0].capitalize()
+            self.model = model_identifier
+        else:
+            self.provider = model_identifier
+
         self.api_key = api_key
 
     def completion(self, messages: List[Dict[str, str]], response_format: Optional[type] = None) -> Optional[str]:
         """
         Sends a completion request to the configured LLM and expects a structured response.
 
-        This method iterates through a list of models for the configured provider,
+        If a specific model was provided during initialization, it will use that model.
+        Otherwise, it iterates through a list of models for the configured provider,
         attempting each one until a successful structured response is obtained.
 
         :param messages: A list of messages forming the conversation history for the prompt.
         :return: The string content of the response, or `None` if all attempts fail.
         """
-        model_list: List[str] = LLM_LIST.get(self.provider, [])
+        model_list: List[str] = [self.model] if self.model else LLM_LIST.get(self.provider, [])
         if not model_list:
             logger.error(f"No models are configured for the provider '{self.provider}'.")
             return None
