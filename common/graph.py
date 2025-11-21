@@ -1,12 +1,5 @@
 from pathlib import Path
-from typing import (
-    Any,
-    List,
-    Mapping,
-    Optional,
-    Set,
-    Tuple,
-)
+from typing import Any
 
 import networkx as nx
 
@@ -19,9 +12,8 @@ from odev.common.odoobin import OdoobinProcess
 logger = logging.getLogger(__name__)
 
 
-def _get_module_path(process: OdoobinProcess, module_name: str) -> Optional[Path]:
-    """
-    Find the path of a module within the Odoo addons paths.
+def _get_module_path(process: OdoobinProcess, module_name: str) -> Path | None:
+    """Find the path of a module within the Odoo addons paths.
 
     :param process: The OdoobinProcess instance which knows about addon paths.
     :param module_name: The name of the module to find.
@@ -37,9 +29,8 @@ def _get_module_path(process: OdoobinProcess, module_name: str) -> Optional[Path
     return None
 
 
-def build_dependency_tree(process: OdoobinProcess, modules: List[str], max_level: int = 1) -> nx.DiGraph:
-    """
-    Build a dependency tree for a list of Odoo modules.
+def build_dependency_tree(process: OdoobinProcess, modules: list[str], max_level: int = 1) -> nx.DiGraph:
+    """Build a dependency tree for a list of Odoo modules.
 
     This method parses modules from the standard Odoo repositories (odoo,
     enterprise, design-themes), reads their manifests to find dependencies,
@@ -51,8 +42,8 @@ def build_dependency_tree(process: OdoobinProcess, modules: List[str], max_level
     :return: A networkx.DiGraph representing the dependency tree.
     """
     graph: nx.DiGraph = nx.DiGraph()
-    to_process: List[Tuple[str, int]] = [(m, 0) for m in modules]
-    processed: Set[str] = set()
+    to_process: list[tuple[str, int]] = [(m, 0) for m in modules]
+    processed: set[str] = set()
 
     while to_process:
         module_name, level = to_process.pop(0)
@@ -65,14 +56,14 @@ def build_dependency_tree(process: OdoobinProcess, modules: List[str], max_level
         if max_level is not None and level >= max_level:
             continue
 
-        module_path: Optional[Path] = _get_module_path(process, module_name)
+        module_path: Path | None = _get_module_path(process, module_name)
         if not module_path:
             logger.warning(f"Module '{module_name}' not found in standard Odoo repositories.")
             continue
 
-        manifest: Optional[Mapping[str, Any]] = process.read_manifest(module_path / "__manifest__.py")
+        manifest: dict[str, Any] | None = process.read_manifest(module_path / "__manifest__.py")
         if manifest and "depends" in manifest:
-            dependencies: List[str] = manifest.get("depends", [])
+            dependencies: list[str] = manifest.get("depends", [])
             for dependency in dependencies:
                 graph.add_edge(dependency, module_name)
                 if dependency not in processed:
@@ -81,24 +72,23 @@ def build_dependency_tree(process: OdoobinProcess, modules: List[str], max_level
     return graph
 
 
-def print_dependency_tree(graph: nx.DiGraph, modules: List[str]) -> None:
-    """
-    Prints the dependency tree and installation order for a given graph.
+def print_dependency_tree(graph: nx.DiGraph, modules: list[str]) -> None:
+    """Print the dependency tree and installation order for a given graph.
 
     :param graph: The dependency graph, as returned by `build_dependency_tree`.
     :param modules: The list of initial modules to highlight in the output.
     """
     console.print(string.stylize(f"\nDependency Tree for: {', '.join(modules)}\n", "bold underline"))
 
-    sorted_modules: List[str] = sorted(graph.nodes())
+    sorted_modules: list[str] = sorted(graph.nodes())
 
     for module in sorted_modules:
-        dependencies: List[str] = sorted(graph.predecessors(module))
+        dependencies: list[str] = sorted(graph.predecessors(module))
         if dependencies:
             console.print(f"  {string.stylize(module, 'bold cyan')} -> {', '.join(dependencies)}")
 
     try:
-        installation_order: List[str] = list(nx.topological_sort(graph))
+        installation_order: list[str] = list(nx.topological_sort(graph))
         console.print(f"\n{string.stylize('Installation Order (Topological Sort):', 'bold underline')}\n")
         for module in installation_order:
             console.print(f"  - {module}")
