@@ -1,5 +1,3 @@
-from typing import Dict, List, Optional
-
 import litellm
 from litellm import InternalServerError, ModelResponse, token_counter
 
@@ -13,8 +11,8 @@ logging.getLogger("LiteLLM").setLevel(logging.WARNING)
 
 # A mapping of provider names to a list of model names to try in order of preference.
 # Note: These may be custom model names/aliases specific to a litellm proxy setup.
-LLM_LIST: Dict[str, List[str]] = {
-    "Gemini": ["gemini/gemini-2.5-pro", "gemini/gemini-2.5-flash"],
+LLM_LIST: dict[str, list[str]] = {
+    "Gemini": ["gemini/gemini-3-pro-preview", "gemini/gemini-2.5-pro", "gemini/gemini-2.5-flash"],
     "ChatGPT": ["chatgpt/gpt-5", "chatgpt/gpt-4.5"],
     "Claude": ["claude/claude-4", "claude/claude-3.7"],
     "Grok": ["grok/grok-4", "grok/grok-3"],
@@ -26,11 +24,10 @@ class LLM:
 
     provider: str
     api_key: str
-    model: Optional[str] = None
+    model: str | None = None
 
-    def __init__(self, model_identifier: Optional[str] = None, api_key: Optional[str] = None):
-        """
-        Initializes the LLM client.
+    def __init__(self, model_identifier: str | None = None, api_key: str | None = None):
+        """Initialize the LLM client.
 
         :param model_identifier: The name of the LLM provider (e.g., "Gemini", "ChatGPT") or a specific model
                                  identifier (e.g., "gemini/gemini-1.5-pro"). If a provider is given, it must
@@ -51,9 +48,8 @@ class LLM:
 
         self.api_key = api_key
 
-    def completion(self, messages: List[Dict[str, str]], response_format: Optional[type] = None) -> Optional[str]:
-        """
-        Sends a completion request to the configured LLM and expects a structured response.
+    def completion(self, messages: list[dict[str, str]], response_format: type | None = None) -> str | None:
+        """Send a completion request to the configured LLM and expect a structured response.
 
         If a specific model was provided during initialization, it will use that model.
         Otherwise, it iterates through a list of models for the configured provider,
@@ -62,7 +58,7 @@ class LLM:
         :param messages: A list of messages forming the conversation history for the prompt.
         :return: The string content of the response, or `None` if all attempts fail.
         """
-        model_list: List[str] = [self.model] if self.model else LLM_LIST.get(self.provider, [])
+        model_list: list[str] = [self.model] if self.model else LLM_LIST.get(self.provider, [])
         if not model_list:
             logger.error(f"No models are configured for the provider '{self.provider}'.")
             return None
@@ -73,13 +69,21 @@ class LLM:
                 logger.debug(f"Attempting completion with model: {model_name}")
                 litellm.suppress_debug_info = True
 
-                response: ModelResponse = litellm.completion(  # type: ignore
+                response: ModelResponse = litellm.completion(
                     model=model_name,
                     messages=messages,
                     api_key=self.api_key,
                     response_format=response_format,
                     verbose=False,
                 )
+            except InternalServerError as e:
+                logger.warning(f"Model '{model_name}' failed with an internal server error: {e}")
+                # Continue to the next model in the list
+            except Exception as e:  # noqa: BLE001
+                # Catch other potential exceptions from litellm (e.g., validation, connection errors)
+                logger.error(f"An unexpected error occurred with model '{model_name}': {e}")
+                # Continue to the next model in the list
+            else:
                 logger.info(f"Successfully received a response from {model_name}.")
 
                 if response.usage:
@@ -90,18 +94,9 @@ class LLM:
                     )
 
                 # Callers expect the string content of the message.
-                if response.choices and response.choices[0].message.content:  # type: ignore
-                    return response.choices[0].message.content  # type: ignore
+                if response.choices and response.choices[0].message.content:
+                    return response.choices[0].message.content
                 return None
-            except InternalServerError as e:
-                logger.warning(f"Model '{model_name}' failed with an internal server error: {e}")
-                # Continue to the next model in the list
-            except Exception as e:
-                # Catch other potential exceptions from litellm (e.g., validation, connection errors)
-                logger.error(f"An unexpected error occurred with model '{model_name}': {e}")
-                # Continue to the next model in the list
 
-        logger.error(
-            f"All configured models for provider '{self.provider}' failed. " f"Attempted: {', '.join(model_list)}"
-        )
+        logger.error(f"All configured models for provider '{self.provider}' failed. Attempted: {', '.join(model_list)}")
         return None
