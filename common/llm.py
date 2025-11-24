@@ -1,12 +1,7 @@
-import litellm
-from litellm import InternalServerError, ModelResponse, token_counter
-
 from odev.common.logging import logging
 
 
 logger = logging.getLogger(__name__)
-# Reduce litellm's default logging verbosity
-logging.getLogger("LiteLLM").setLevel(logging.WARNING)
 
 
 # A mapping of provider names to a list of model names to try in order of preference.
@@ -58,6 +53,12 @@ class LLM:
         :param messages: A list of messages forming the conversation history for the prompt.
         :return: The string content of the response, or `None` if all attempts fail.
         """
+        import litellm  # noqa: PLC0415
+        from litellm import InternalServerError, ModelResponse, token_counter  # noqa: PLC0415
+
+        # Reduce litellm's default logging verbosity
+        logging.getLogger("LiteLLM").setLevel(logging.WARNING)
+
         model_list: list[str] = [self.model] if self.model else LLM_LIST.get(self.provider, [])
         if not model_list:
             logger.error(f"No models are configured for the provider '{self.provider}'.")
