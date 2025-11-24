@@ -89,7 +89,7 @@ class OdooContext:
         analysis: dict[str, Any] | None = None,
         override_module_name: str = "",
         dependency_level: int = 0,
-    ) -> dict[str, dict[str, list[dict[str, Any]]]]:
+    ) -> list[dict[str, str]]:
         """Iterate over modules and gather context based on the analysis."""
         if analysis is None:
             analysis = {}
@@ -101,7 +101,7 @@ class OdooContext:
 
         logger.info(f"Gathering Odoo context from modules: {', '.join(sorted_modules)}")
 
-        context: dict[str, dict[str, list[dict[str, Any]]]] = {}
+        context: list[dict[str, str]] = []
 
         for module_name in sorted_modules:
             if module_name in ["base", "web", "mail", "utm"]:
@@ -110,18 +110,6 @@ class OdooContext:
             module_path = module_paths.get(module_name)
             if not module_path:
                 continue
-
-            context[module_name] = {
-                "models": [],
-                "views": [],
-                "controllers": [],
-                "assets": [],
-                "security": [],
-                "reports": [],
-                "website": [],
-                "data": [],
-                "manifests": [],
-            }
 
             self._gather_manifest(context, module_name, module_path)
             self._gather_models(context, module_name, module_path, analysis, override_module_name)
@@ -133,50 +121,41 @@ class OdooContext:
             self._gather_website_templates(context, module_name, module_path, analysis)
             self._gather_data(context, module_name, module_path)
 
-        if logger.isEnabledFor(logging.DEBUG):
-            self._log_context_summary(context)
-
         return context
 
-    def _log_context_summary(self, context: dict) -> None:
-        """Log a summary of the gathered context."""
-        summary_message = "Odoo Context Summary:\n"
-        grand_total_items = grand_total_lines = grand_total_chars = 0
+    def _add_file_to_context(
+        self,
+        context: list[dict[str, str]],
+        module_name: str,
+        module_path: Path,
+        file_path: Path,
+        content: str | None = None,
+    ) -> None:
+        """Add a file's content to the context list."""
+        if content is None:
+            content = file_path.read_text()
 
-        for module_name, categories in context.items():
-            module_total_items = sum(len(items) for items in categories.values())
-            if module_total_items > 0:
-                summary_message += f"  - {module_name}:\n"
-                for category, items in sorted(categories.items()):
-                    if items:
-                        num_items = len(items)
-                        num_lines = sum(len(item.get("content", "")) for item in items)
-                        num_chars = sum(len("\n".join(item.get("content", ""))) for item in items)
-                        grand_total_items += num_items
-                        grand_total_lines += num_lines
-                        grand_total_chars += num_chars
-                        summary_message += f"    - {category.capitalize()}: "
-                        summary_message += f"{num_items} item(s), {num_lines} line(s)"
-                        summary_message += f", {num_chars} char(s)\n"
-        summary_message += (
-            f"\nTotal: {grand_total_items} item(s), {grand_total_lines} line(s), {grand_total_chars} char(s)"
+        try:
+            relative_path = str(file_path.relative_to(module_path))
+        except ValueError:
+            relative_path = file_path.name
+
+        context.append(
+            {
+                "type": "text",
+                "text": f"File: {module_name}/{relative_path}\nContent:\n{content}",
+            }
         )
-        logger.debug(summary_message)
 
-    def _gather_manifest(self, context: dict, module_name: str, module_path: Path) -> None:
+    def _gather_manifest(self, context: list[dict[str, str]], module_name: str, module_path: Path) -> None:
         """Gathers manifest file content."""
         manifest_path = module_path / "__manifest__.py"
         if manifest_path.exists():
-            context[module_name]["manifests"].append(
-                {
-                    "path": str(manifest_path),
-                    "content": manifest_path.read_text().split("\n"),
-                }
-            )
+            self._add_file_to_context(context, module_name, module_path, manifest_path)
 
     def _gather_models(
         self,
-        context: dict,
+        context: list[dict[str, str]],
         module_name: str,
         module_path: Path,
         analysis: dict[str, Any],
@@ -192,7 +171,7 @@ class OdooContext:
 
         try:
             init_content = init_py.read_text()
-            context[module_name]["models"].append({"path": str(init_py), "content": init_content})
+            self._add_file_to_context(context, module_name, module_path, init_py, content=init_content)
             loaded_py_files: list[Path] = []
             for line in init_content.splitlines():
                 match = re.match(r"^\s*from\s+\.\s+import\s+([\w, ]+)", line)
@@ -203,14 +182,17 @@ class OdooContext:
                             loaded_py_files.append(py_file)
 
             for py_file in loaded_py_files:
-                self._process_model_file(context, module_name, py_file, analysis_models, override_module_name)
+                self._process_model_file(
+                    context, module_name, module_path, py_file, analysis_models, override_module_name
+                )
         except Exception as e:  # noqa: BLE001
             logger.warning(f"Could not process models for {module_name}: {e}")
 
     def _process_model_file(
         self,
-        context: dict,
+        context: list[dict[str, str]],
         module_name: str,
+        module_path: Path,
         py_file: Path,
         analysis_models: set[str],
         override_module_name: str,
@@ -248,15 +230,13 @@ class OdooContext:
             if analysis_models.intersection(set(declared + inherited)) or (
                 not analysis_models and module_name == override_module_name
             ):
-                context[module_name]["models"].append(
-                    {
-                        "path": str(py_file),
-                        "content": (file_content if module_name == override_module_name else class_content).split("\n"),
-                    }
-                )
+                content = file_content if module_name == override_module_name else class_content
+                self._add_file_to_context(context, module_name, module_path, py_file, content=content)
             i = j
 
-    def _gather_views(self, context: dict, module_name: str, module_path: Path, analysis: dict[str, Any]) -> None:
+    def _gather_views(
+        self, context: list[dict[str, str]], module_name: str, module_path: Path, analysis: dict[str, Any]
+    ) -> None:
         """Gathers view files based on models in the analysis."""
         analysis_views: list[dict[str, Any]] = analysis.get("views", [])
         if not analysis_views:
@@ -270,12 +250,14 @@ class OdooContext:
                 for record in tree.findall(".//record[@model='ir.ui.view']"):
                     model_field = record.find("./field[@name='model']")
                     if model_field is not None and model_field.text in analysis_view_models:
-                        context[module_name]["views"].append({"path": str(xml_file), "content": content.split("\n")})
+                        self._add_file_to_context(context, module_name, module_path, xml_file, content=content)
                         break
             except (ET.ParseError, FileNotFoundError):
                 continue
 
-    def _gather_controllers(self, context: dict, module_name: str, module_path: Path, analysis: dict[str, Any]) -> None:
+    def _gather_controllers(
+        self, context: list[dict[str, str]], module_name: str, module_path: Path, analysis: dict[str, Any]
+    ) -> None:
         """Gathers controller files by matching routes from the analysis."""
         analysis_controllers: list[dict[str, Any]] = analysis.get("controller", [])
         if not analysis_controllers:
@@ -294,9 +276,11 @@ class OdooContext:
                 routes_in_file.extend(re.findall(r"['\"]([^'\"]+)['\"]", route_list))
 
             if analysis_routes.intersection(routes_in_file):
-                context[module_name]["controllers"].append({"path": str(py_file), "content": content.split("\n")})
+                self._add_file_to_context(context, module_name, module_path, py_file, content=content)
 
-    def _gather_assets(self, context: dict, module_name: str, module_path: Path, analysis: dict[str, Any]) -> None:
+    def _gather_assets(
+        self, context: list[dict[str, str]], module_name: str, module_path: Path, analysis: dict[str, Any]
+    ) -> None:
         """Gathers asset files by matching paths from the analysis."""
         for asset in analysis.get("assets", []):
             file_path_str: str | None = asset.get("file_path")
@@ -308,30 +292,25 @@ class OdooContext:
 
             potential_path = module_path / file_path_str
             if potential_path.exists():
-                context[module_name]["assets"].append(
-                    {
-                        "path": str(potential_path),
-                        "content": potential_path.read_text(),
-                    }
-                )
+                self._add_file_to_context(context, module_name, module_path, potential_path)
             else:
                 # Fallback to search by filename
                 filename = Path(file_path_str).name
                 for f in module_path.rglob(filename):
-                    context[module_name]["assets"].append({"path": str(f), "content": f.read_text().split("\n")})
+                    self._add_file_to_context(context, module_name, module_path, f)
                     break
 
-    def _gather_security(self, context: dict, module_name: str, module_path: Path) -> None:
+    def _gather_security(self, context: list[dict[str, str]], module_name: str, module_path: Path) -> None:
         """Gathers all files from the 'security' directory."""
         security_dir = module_path / "security"
         if security_dir.is_dir():
             for sec_file in security_dir.iterdir():
                 if sec_file.is_file() and (sec_file.name.endswith(".csv") or sec_file.name.endswith(".xml")):
-                    context[module_name]["security"].append(
-                        {"path": str(sec_file), "content": sec_file.read_text().split("\n")}
-                    )
+                    self._add_file_to_context(context, module_name, module_path, sec_file)
 
-    def _gather_reports(self, context: dict, module_name: str, module_path: Path, analysis: dict[str, Any]) -> None:
+    def _gather_reports(
+        self, context: list[dict[str, str]], module_name: str, module_path: Path, analysis: dict[str, Any]
+    ) -> None:
         """Gathers report definition files based on models in the analysis."""
         report_models: set[str] = {r["model"] for r in analysis.get("reports", []) if "model" in r}
         if not report_models:
@@ -344,13 +323,13 @@ class OdooContext:
                 for record in tree.findall(".//record[@model='ir.actions.report']"):
                     model_field = record.find("./field[@name='model']")
                     if model_field is not None and model_field.text in report_models:
-                        context[module_name]["reports"].append({"path": str(xml_file), "content": content.split("\n")})
+                        self._add_file_to_context(context, module_name, module_path, xml_file, content=content)
                         break
             except (ET.ParseError, FileNotFoundError):
                 continue
 
     def _gather_website_templates(
-        self, context: dict, module_name: str, module_path: Path, analysis: dict[str, Any]
+        self, context: list[dict[str, str]], module_name: str, module_path: Path, analysis: dict[str, Any]
     ) -> None:
         """Gathers website template files by matching template IDs from the analysis."""
         view_ids: set[str] = {v["view"] for v in analysis.get("website_views", []) if "view" in v}
@@ -364,17 +343,15 @@ class OdooContext:
                 for template in tree.findall(".//template"):
                     template_id = template.get("id")
                     if template_id and template_id in view_ids:
-                        context[module_name]["website"].append({"path": str(xml_file), "content": content.split("\n")})
+                        self._add_file_to_context(context, module_name, module_path, xml_file, content=content)
                         break
             except (ET.ParseError, FileNotFoundError):
                 continue
 
-    def _gather_data(self, context: dict, module_name: str, module_path: Path) -> None:
+    def _gather_data(self, context: list[dict[str, str]], module_name: str, module_path: Path) -> None:
         """Gathers all XML data files from the 'data' directory."""
         data_dir = module_path / "data"
         if data_dir.is_dir():
             for data_file in data_dir.iterdir():
                 if data_file.is_file() and (data_file.name.endswith(".csv") or data_file.name.endswith(".xml")):
-                    context[module_name]["data"].append(
-                        {"path": str(data_file), "content": data_file.read_text().split("\n")}
-                    )
+                    self._add_file_to_context(context, module_name, module_path, data_file)

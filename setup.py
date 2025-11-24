@@ -13,12 +13,12 @@ def setup(odev: Odev) -> None:
     """Set up the AI plugin by configuring the default LLM and API key."""
     # The `console.select` returns the value from the (value, display_name) tuple.
     # The LLM class expects the provider name to be capitalized (e.g., "Gemini").
-    choices = sorted((name, name) for name in LLM_LIST.keys())
+    choices = sorted((name, name) for name in LLM_LIST)
 
     llm_name = console.select(
         "Which LLM do you want to use?",
         choices,
-        list(LLM_LIST.keys())[0],
+        next(iter(LLM_LIST.keys())),
     )
 
     if llm_name is None:

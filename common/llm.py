@@ -1,4 +1,5 @@
 from odev.common.logging import logging
+from odev.common.progress import spinner
 
 
 logger = logging.getLogger(__name__)
@@ -43,7 +44,9 @@ class LLM:
 
         self.api_key = api_key
 
-    def completion(self, messages: list[dict[str, str]], response_format: type | None = None) -> str | None:
+    def completion(
+        self, messages: list[dict[str, str]], response_format: type | None = None, progress: spinner = None
+    ) -> str | None:
         """Send a completion request to the configured LLM and expect a structured response.
 
         If a specific model was provided during initialization, it will use that model.
@@ -54,7 +57,13 @@ class LLM:
         :return: The string content of the response, or `None` if all attempts fail.
         """
         import litellm  # noqa: PLC0415
-        from litellm import InternalServerError, ModelResponse, token_counter  # noqa: PLC0415
+        from litellm import (  # noqa: PLC0415
+            ContextWindowExceededError,
+            InternalServerError,
+            ModelResponse,
+            RateLimitError,
+            token_counter,
+        )
 
         # Reduce litellm's default logging verbosity
         logging.getLogger("LiteLLM").setLevel(logging.WARNING)
@@ -65,9 +74,11 @@ class LLM:
             return None
 
         for model_name in model_list:
+            if progress:
+                progress.update(f"Scaffolding analysis with {model_name} ..")
             logger.debug(f"Token counter : {token_counter(model=model_name, messages=messages)} tokens")
             try:
-                logger.debug(f"Attempting completion with model: {model_name}")
+                logger.debug(f"Attempting completion with model: '{model_name}'")
                 litellm.suppress_debug_info = True
 
                 response: ModelResponse = litellm.completion(
@@ -77,6 +88,10 @@ class LLM:
                     response_format=response_format,
                     verbose=False,
                 )
+            except RateLimitError:
+                logger.error(f"{model_name} is currently rate limited.")
+            except ContextWindowExceededError:
+                logger.error(f"The context windows is to big for {model_name}.")
             except InternalServerError as e:
                 logger.warning(f"Model '{model_name}' failed with an internal server error: {e}")
                 # Continue to the next model in the list
