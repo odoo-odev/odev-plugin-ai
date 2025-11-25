@@ -3,7 +3,7 @@ from odev.common.console import console
 from odev.common.logging import logging
 from odev.common.odev import Odev
 
-from odev.plugins.odev_plugin_ai.common.llm import LLM_LIST
+from odev.plugins.odev_plugin_ai.common.llm import LLM_PROVIDER_LIST
 
 
 logger = logging.getLogger(__name__)
@@ -11,20 +11,18 @@ logger = logging.getLogger(__name__)
 
 def setup(odev: Odev) -> None:
     """Set up the AI plugin by configuring the default LLM and API key."""
-    # The `console.select` returns the value from the (value, display_name) tuple.
-    # The LLM class expects the provider name to be capitalized (e.g., "Gemini").
-    choices = sorted((name, name) for name in LLM_LIST)
+    choices = [(name, name) for name in LLM_PROVIDER_LIST]
 
-    llm_name = console.select(
-        "Which LLM do you want to use?",
+    providers = console.checkbox(
+        "Which LLM do you want to use ? (You will be prompted next for the API key)",
         choices,
-        next(iter(LLM_LIST.keys())),
+        LLM_PROVIDER_LIST["Gemini"][0],
     )
 
-    if llm_name is None:
+    if providers is None:
         raise ValueError("No LLM selected. Please select a valid LLM provider.")
 
-    odev.config.set("ai", "default_llm", llm_name)
+    odev.config.ai.llm_order = providers
 
     logger.info(
         string.normalize_indent(
@@ -38,6 +36,12 @@ def setup(odev: Odev) -> None:
         )
     )
 
-    odev.store.secrets.get("llm_api_key", scope="api", fields=["password"], prompt_format="Enter your LLM API Key:")
+    for provider in providers:
+        odev.store.secrets.get(
+            f"{provider.lower()}_api_key",
+            scope="api",
+            fields=["password"],
+            prompt_format=f"Enter your {provider} API KEY:",
+        )
 
     logger.info("AI plugin configured successfully.")

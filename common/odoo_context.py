@@ -13,11 +13,75 @@ from odev.common.odoobin import OdoobinProcess
 from odev.plugins.odev_plugin_ai.common import graph
 
 
+logger = logging.getLogger(__name__)
+
 # Type alias for context items: each item is a dict with 'type' key and either 'text' or 'image_url'
 ContextItem = dict[str, str | dict[str, str]]
-Context = list[ContextItem]
 
-logger = logging.getLogger(__name__)
+
+class Context(list):
+    """A list-like object that holds context files and can format them for different LLMs."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._files: list[dict[str, str]] = []
+
+    def add_file(self, module_name: str, relative_path: str, content: str) -> None:
+        """Add a file to the context."""
+        self._files.append({"module": module_name, "path": relative_path, "content": content})
+        # Default representation (Text)
+        self.extend(
+            [
+                {
+                    "type": "text",
+                    "text": f"{module_name}/{relative_path}",
+                },
+                {
+                    "type": "text",
+                    "text": content,
+                },
+            ]
+        )
+
+    def format_for_llm(self, model_name: str) -> list[ContextItem]:
+        """Format the context for a specific LLM."""
+        formatted: list[ContextItem] = []
+        is_gemini = "gemini" in model_name.lower()
+
+        for file in self._files:
+            module = file["module"]
+            path = file["path"]
+            content = file["content"]
+
+            if is_gemini:
+                encoded_content = base64.b64encode(content.encode("utf-8")).decode("utf-8")
+                formatted.extend(
+                    [
+                        {
+                            "type": "text",
+                            "text": f"{module}/{path}",
+                        },
+                        {
+                            "type": "image_url",
+                            "image_url": {"url": f"data:text/plain;base64,{encoded_content}"},
+                        },
+                    ]
+                )
+            else:
+                # Text format for ChatGPT / others
+                formatted.extend(
+                    [
+                        {
+                            "type": "text",
+                            "text": f"{module}/{path}",
+                        },
+                        {
+                            "type": "text",
+                            "text": content,
+                        },
+                    ]
+                )
+        return formatted
 
 
 class OdooContext:
@@ -30,22 +94,25 @@ class OdooContext:
         """Initialize the OdooContext with the given process."""
         self.process: OdoobinProcess = process
 
-    def gather_po_context(self, po_content: str) -> dict:
+    def gather_po_context(self, po_content: str) -> Context:
         """Gathers context from files referenced in PO file content.
 
         It looks for lines like `#: code:path/to/file:line_number`,
         extracts the unique file paths, reads their content, and returns
-        it in a dictionary.
+        it in a Context object.
 
         :param po_content: The string content of a PO file.
-        :return: A dictionary mapping file paths to their content.
+        :return: A Context object containing the gathered files.
         """
         module_names = []
-        context_files = {}
+        context: Context = Context()
+
         # Regex to find file paths in lines like `#: code:path/to/file:line_number`
         file_paths = re.findall(r"#: code:(.*?):\d+", po_content)
         for file_path_str in set(file_paths):
             full_path = None
+            module_name = None
+            module_path = None
             if file_path_str.startswith("addons/"):
                 path_parts = Path(file_path_str).parts
                 if len(path_parts) > 1:
@@ -56,14 +123,14 @@ class OdooContext:
                         relative_file_path = Path(*path_parts[2:])
                         full_path = module_path / relative_file_path
 
-            if full_path and full_path.exists():
-                context_files[file_path_str] = full_path.read_text()
+            if full_path and full_path.exists() and module_name and module_path:
+                self._add_file_to_context(context, module_name, module_path, full_path)
             else:
                 logger.warning(f"Could not find context file: {file_path_str}")
 
-        logger.info(f"Gathered context from {len(context_files)} files in modules: {', '.join(set(module_names))}")
+        logger.info(f"Gathered context from {len(context._files)} files in modules: {', '.join(set(module_names))}")
 
-        return context_files
+        return context
 
     def _build_dependency_info(
         self, initial_depends: list[str], dependency_level: int
@@ -106,7 +173,7 @@ class OdooContext:
 
         logger.info(f"Gathering Odoo context from modules: {', '.join(sorted_modules)}")
 
-        context: Context = []
+        context: Context = Context()
 
         for module_name in sorted_modules:
             if module_name in ["base", "web", "mail", "utm"]:
@@ -145,19 +212,7 @@ class OdooContext:
         except ValueError:
             relative_path = file_path.name
 
-        encoded_content = base64.b64encode(content.encode("utf-8")).decode("utf-8")
-        context.extend(
-            [
-                {
-                    "type": "text",
-                    "text": f"{module_name}/{relative_path}",
-                },
-                {
-                    "type": "image_url",
-                    "image_url": {"url": f"data:text/plain;base64,{encoded_content}"},
-                },
-            ]
-        )
+        context.add_file(module_name, relative_path, content)
 
     def _gather_manifest(self, context: Context, module_name: str, module_path: Path) -> None:
         """Gathers manifest file content."""

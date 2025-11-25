@@ -1,4 +1,7 @@
+import itertools
+
 from odev.common.logging import logging
+from odev.common.mixins.framework import OdevFrameworkMixin
 from odev.common.progress import spinner
 
 
@@ -7,22 +10,30 @@ logger = logging.getLogger(__name__)
 
 # A mapping of provider names to a list of model names to try in order of preference.
 # Note: These may be custom model names/aliases specific to a litellm proxy setup.
-LLM_LIST: dict[str, list[str]] = {
-    "Gemini": ["gemini/gemini-3-pro-preview", "gemini/gemini-2.5-pro", "gemini/gemini-2.5-flash"],
-    "ChatGPT": ["chatgpt/gpt-5", "chatgpt/gpt-4.5"],
-    "Claude": ["claude/claude-4", "claude/claude-3.7"],
-    "Grok": ["grok/grok-4", "grok/grok-3"],
+LLM_PROVIDER_LIST: dict = {
+    "Gemini": {
+        "flagship": "gemini/gemini-3-pro-preview",
+        "stable": "gemini/gemini-2.5-pro",
+        "fast": "gemini/gemini-2.5-flash",
+    },
+    "Anthropic": {
+        "flagship": "anthropic/claude-4-5-opus",
+        "stable": "anthropic/claude-4-5-sonnet",
+        "fast": "anthropic/claude-3-5-haiku",
+    },
+    "OpenAI": {"flagship": "gpt-4.1", "stable": "gpt-4.1-mini", "fast": "gpt-4.1-nano"},
+    "xAI": {"flagship": "xai/grok-4-1", "stable": "xai/grok-4", "fast": "xai/grok-4-fast"},
 }
 
 
-class LLM:
+class LLM(OdevFrameworkMixin):
     """A client for interacting with Large Language Models via litellm."""
 
     provider: str
-    api_key: str
     model: str | None = None
+    llm_order: list = []
 
-    def __init__(self, model_identifier: str | None = None, api_key: str | None = None):
+    def __init__(self, model_identifier: str | None = None, llm_order: list | None = None):
         """Initialize the LLM client.
 
         :param model_identifier: The name of the LLM provider (e.g., "Gemini", "ChatGPT") or a specific model
@@ -31,18 +42,136 @@ class LLM:
         :param api_key: The API key for the specified provider.
         :raises ValueError: If the provider or API key is not provided.
         """
-        if not model_identifier:
-            raise ValueError("An LLM provider must be configured.")
-        if not api_key:
-            raise ValueError("An LLM API key must be configured.")
+        self.llm_order = [] if llm_order is None else llm_order
 
-        if "/" in model_identifier:
+        if model_identifier and "/" in model_identifier:
             self.provider = model_identifier.split("/")[0].capitalize()
             self.model = model_identifier
         else:
             self.provider = model_identifier
 
-        self.api_key = api_key
+    def _format_messages_for_model(self, messages: list[dict[str, str]], model_name: str) -> list[dict[str, str]]:
+        """Format messages for a specific LLM model.
+
+        This method processes message content that may contain Context objects
+        with format_for_llm() methods, calling them to get model-specific formatting.
+
+        :param messages: The original list of messages.
+        :param model_name: The name of the model to format for.
+        :return: A new list of formatted messages.
+        """
+        formatted_messages = []
+        for msg in messages:
+            new_msg = msg.copy()
+            content = msg.get("content")
+
+            # Handle direct Context objects
+            if hasattr(content, "format_for_llm"):
+                new_msg["content"] = content.format_for_llm(model_name)
+            # Handle lists that may contain Context objects
+            elif isinstance(content, list):
+                formatted_content = []
+                for item in content:
+                    if hasattr(item, "format_for_llm"):
+                        # This is a Context object, format it and extend the list
+                        formatted_content.extend(item.format_for_llm(model_name))
+                    else:
+                        # Regular dict item, keep as-is
+                        formatted_content.append(item)
+                new_msg["content"] = formatted_content
+
+            formatted_messages.append(new_msg)
+
+        return formatted_messages
+
+    def _get_model_list(self) -> list[str]:
+        """Get the list of models to attempt based on configuration.
+
+        :return: A list of model names to try, in order of preference.
+        """
+        model_list = []
+
+        if self.model:
+            model_list = [self.model]
+        elif self.llm_order:
+            # Get models for each provider in order
+            providers_models = [
+                list(LLM_PROVIDER_LIST[provider].values())
+                for provider in self.llm_order
+                if provider in LLM_PROVIDER_LIST
+            ]
+
+            # Interleave models: P1_M1, P2_M1, P1_M2, P2_M2, ...
+            for models in itertools.zip_longest(*providers_models):
+                for model in models:
+                    if model:
+                        model_list.append(model)
+        elif self.provider and self.provider in LLM_PROVIDER_LIST:
+            model_list = list(LLM_PROVIDER_LIST[self.provider].values())
+
+        return model_list
+
+    def _try_model_completion(
+        self,
+        model_name: str,
+        messages: list[dict[str, str]],
+        response_format: type | None,
+    ) -> str | None:
+        """Attempt completion with a single model.
+
+        :param model_name: The name of the model to try.
+        :param messages: The formatted messages for this model.
+        :param response_format: Optional response format specification.
+        :return: The response content as a string, or None if the attempt failed.
+        """
+        import litellm  # noqa: PLC0415
+        from litellm import (  # noqa: PLC0415
+            ContextWindowExceededError,
+            InternalServerError,
+            ModelResponse,
+            RateLimitError,
+            token_counter,
+        )
+
+        logger.debug(f"Token counter : {token_counter(model=model_name, messages=messages)} tokens")
+
+        try:
+            logger.debug(f"Attempting completion with model: '{model_name}'")
+            litellm.suppress_debug_info = True
+
+            response: ModelResponse = litellm.completion(
+                model=model_name,
+                messages=messages,
+                response_format=response_format,
+                verbose=False,
+            )
+        except RateLimitError:
+            logger.error(f"{model_name} is currently rate limited.")
+            return None
+        except ContextWindowExceededError:
+            logger.error(f"The context windows is to big for {model_name}.")
+            return None
+        except InternalServerError as e:
+            logger.warning(f"Model '{model_name}' failed with an internal server error: {e}")
+            return None
+        except Exception as e:  # noqa: BLE001
+            logger.error(f"An unexpected error occurred with model '{model_name}': {e}")
+            return None
+
+        # Success case
+        logger.info(f"Successfully received a response from {model_name}.")
+
+        if response.usage:
+            logger.debug(
+                f"LLM Usage: {response.usage.prompt_tokens} prompt, "
+                f"{response.usage.completion_tokens} completion, "
+                f"{response.usage.total_tokens} total tokens."
+            )
+
+        # Extract and return content
+        if response.choices and response.choices[0].message.content:
+            return response.choices[0].message.content
+        return None
 
     def completion(
         self, messages: list[dict[str, str]], response_format: type | None = None, progress: spinner = None
@@ -56,63 +185,28 @@ class LLM:
         :param messages: A list of messages forming the conversation history for the prompt.
         :return: The string content of the response, or `None` if all attempts fail.
         """
-        import litellm  # noqa: PLC0415
-        from litellm import (  # noqa: PLC0415
-            ContextWindowExceededError,
-            InternalServerError,
-            ModelResponse,
-            RateLimitError,
-            token_counter,
-        )
-
         # Reduce litellm's default logging verbosity
         logging.getLogger("LiteLLM").setLevel(logging.WARNING)
 
-        model_list: list[str] = [self.model] if self.model else LLM_LIST.get(self.provider, [])
+        model_list = self._get_model_list()
         if not model_list:
-            logger.error(f"No models are configured for the provider '{self.provider}'.")
+            logger.error("No models configured to try.")
             return None
 
         for model_name in model_list:
+            current_messages = self._format_messages_for_model(messages, model_name)
+
             if progress:
-                progress.update(f"Scaffolding analysis with {model_name} ..")
-            logger.debug(f"Token counter : {token_counter(model=model_name, messages=messages)} tokens")
-            try:
-                logger.debug(f"Attempting completion with model: '{model_name}'")
-                litellm.suppress_debug_info = True
+                progress.update(f"Calling LLM {model_name} ..")
 
-                response: ModelResponse = litellm.completion(
-                    model=model_name,
-                    messages=messages,
-                    api_key=self.api_key,
-                    response_format=response_format,
-                    verbose=False,
-                )
-            except RateLimitError:
-                logger.error(f"{model_name} is currently rate limited.")
-            except ContextWindowExceededError:
-                logger.error(f"The context windows is to big for {model_name}.")
-            except InternalServerError as e:
-                logger.warning(f"Model '{model_name}' failed with an internal server error: {e}")
-                # Continue to the next model in the list
-            except Exception as e:  # noqa: BLE001
-                # Catch other potential exceptions from litellm (e.g., validation, connection errors)
-                logger.error(f"An unexpected error occurred with model '{model_name}': {e}")
-                # Continue to the next model in the list
-            else:
-                logger.info(f"Successfully received a response from {model_name}.")
+            result = self._try_model_completion(
+                model_name,
+                current_messages,
+                response_format,
+            )
 
-                if response.usage:
-                    logger.debug(
-                        f"LLM Usage: {response.usage.prompt_tokens} prompt, "
-                        f"{response.usage.completion_tokens} completion, "
-                        f"{response.usage.total_tokens} total tokens."
-                    )
-
-                # Callers expect the string content of the message.
-                if response.choices and response.choices[0].message.content:
-                    return response.choices[0].message.content
-                return None
+            if result is not None:
+                return result
 
         logger.error(f"All configured models for provider '{self.provider}' failed. Attempted: {', '.join(model_list)}")
         return None
