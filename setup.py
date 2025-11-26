@@ -16,7 +16,7 @@ def setup(odev: Odev) -> None:
     providers = console.checkbox(
         "Which LLM do you want to use ? (You will be prompted next for the API key)",
         choices,
-        LLM_PROVIDER_LIST["Gemini"][0],
+        choices[0][0],
     )
 
     if providers is None:
