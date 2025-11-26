@@ -1,8 +1,8 @@
 import itertools
 
+from odev.common import progress
 from odev.common.logging import logging
 from odev.common.mixins.framework import OdevFrameworkMixin
-from odev.common.progress import spinner
 
 
 logger = logging.getLogger(__name__)
@@ -22,7 +22,11 @@ LLM_PROVIDER_LIST: dict = {
         "fast": "anthropic/claude-3-5-haiku",
     },
     "OpenAI": {"flagship": "gpt-4.1", "stable": "gpt-4.1-mini", "fast": "gpt-4.1-nano"},
-    "xAI": {"flagship": "xai/grok-4-1", "stable": "xai/grok-4", "fast": "xai/grok-4-fast"},
+    "xAI": {
+        "flagship": "xai/grok-4-1",
+        "stable": "xai/grok-4",
+        "fast": "xai/grok-4-fast",
+    },
 }
 
 
@@ -173,9 +177,7 @@ class LLM(OdevFrameworkMixin):
             return response.choices[0].message.content
         return None
 
-    def completion(
-        self, messages: list[dict[str, str]], response_format: type | None = None, progress: spinner = None
-    ) -> str | None:
+    def completion(self, messages: list[dict[str, str]], response_format: type | None = None) -> str | None:
         """Send a completion request to the configured LLM and expect a structured response.
 
         If a specific model was provided during initialization, it will use that model.
@@ -194,16 +196,14 @@ class LLM(OdevFrameworkMixin):
             return None
 
         for model_name in model_list:
-            current_messages = self._format_messages_for_model(messages, model_name)
+            with progress.spinner(f"Calling {model_name} ..."):
+                current_messages = self._format_messages_for_model(messages, model_name)
 
-            if progress:
-                progress.update(f"Calling LLM {model_name} ..")
-
-            result = self._try_model_completion(
-                model_name,
-                current_messages,
-                response_format,
-            )
+                result = self._try_model_completion(
+                    model_name,
+                    current_messages,
+                    response_format,
+                )
 
             if result is not None:
                 return result

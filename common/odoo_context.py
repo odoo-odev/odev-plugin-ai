@@ -163,6 +163,9 @@ class OdooContext:
         dependency_level: int = 0,
     ) -> Context:
         """Iterate over modules and gather context based on the analysis."""
+        if not depends:
+            logger.warning("No depends found on the analysis or provided as arguments. No context will be provided.")
+
         if analysis is None:
             analysis = {}
 
@@ -170,8 +173,6 @@ class OdooContext:
         module_paths: dict[str, Path] = {}
         if depends:
             sorted_modules, module_paths = self._build_dependency_info(depends, dependency_level)
-
-        logger.info(f"Gathering Odoo context from modules: {', '.join(sorted_modules)}")
 
         context: Context = Context()
 
@@ -192,6 +193,8 @@ class OdooContext:
             self._gather_reports(context, module_name, module_path, analysis)
             self._gather_website_templates(context, module_name, module_path, analysis)
             self._gather_data(context, module_name, module_path)
+
+        logger.info(f"Gathered context from {len(context._files)} files in modules: {', '.join(set(sorted_modules))}")
 
         return context
 
@@ -250,7 +253,12 @@ class OdooContext:
 
             for py_file in loaded_py_files:
                 self._process_model_file(
-                    context, module_name, module_path, py_file, analysis_models, override_module_name
+                    context,
+                    module_name,
+                    module_path,
+                    py_file,
+                    analysis_models,
+                    override_module_name,
                 )
         except Exception as e:  # noqa: BLE001
             logger.warning(f"Could not process models for {module_name}: {e}")
@@ -301,7 +309,13 @@ class OdooContext:
                 self._add_file_to_context(context, module_name, module_path, py_file, content=content)
             i = j
 
-    def _gather_views(self, context: Context, module_name: str, module_path: Path, analysis: dict[str, Any]) -> None:
+    def _gather_views(
+        self,
+        context: Context,
+        module_name: str,
+        module_path: Path,
+        analysis: dict[str, Any],
+    ) -> None:
         """Gathers view files based on models in the analysis."""
         analysis_views: list[dict[str, Any]] = analysis.get("views", [])
         if not analysis_views:
@@ -321,7 +335,11 @@ class OdooContext:
                 continue
 
     def _gather_controllers(
-        self, context: Context, module_name: str, module_path: Path, analysis: dict[str, Any]
+        self,
+        context: Context,
+        module_name: str,
+        module_path: Path,
+        analysis: dict[str, Any],
     ) -> None:
         """Gathers controller files by matching routes from the analysis."""
         analysis_controllers: list[dict[str, Any]] = analysis.get("controller", [])
@@ -343,7 +361,13 @@ class OdooContext:
             if analysis_routes.intersection(routes_in_file):
                 self._add_file_to_context(context, module_name, module_path, py_file, content=content)
 
-    def _gather_assets(self, context: Context, module_name: str, module_path: Path, analysis: dict[str, Any]) -> None:
+    def _gather_assets(
+        self,
+        context: Context,
+        module_name: str,
+        module_path: Path,
+        analysis: dict[str, Any],
+    ) -> None:
         """Gathers asset files by matching paths from the analysis."""
         for asset in analysis.get("assets", []):
             file_path_str: str | None = asset.get("file_path")
@@ -371,7 +395,13 @@ class OdooContext:
                 if sec_file.is_file() and (sec_file.name.endswith(".csv") or sec_file.name.endswith(".xml")):
                     self._add_file_to_context(context, module_name, module_path, sec_file)
 
-    def _gather_reports(self, context: Context, module_name: str, module_path: Path, analysis: dict[str, Any]) -> None:
+    def _gather_reports(
+        self,
+        context: Context,
+        module_name: str,
+        module_path: Path,
+        analysis: dict[str, Any],
+    ) -> None:
         """Gathers report definition files based on models in the analysis."""
         report_models: set[str] = {r["model"] for r in analysis.get("reports", []) if "model" in r}
         if not report_models:
@@ -390,7 +420,11 @@ class OdooContext:
                 continue
 
     def _gather_website_templates(
-        self, context: Context, module_name: str, module_path: Path, analysis: dict[str, Any]
+        self,
+        context: Context,
+        module_name: str,
+        module_path: Path,
+        analysis: dict[str, Any],
     ) -> None:
         """Gathers website template files by matching template IDs from the analysis."""
         view_ids: set[str] = {v["view"] for v in analysis.get("website_views", []) if "view" in v}
