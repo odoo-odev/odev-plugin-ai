@@ -1,4 +1,3 @@
-import base64
 import re
 import xml.etree.ElementTree as ET
 from pathlib import Path
@@ -11,77 +10,10 @@ from odev.common.logging import logging
 from odev.common.odoobin import OdoobinProcess
 
 from odev.plugins.odev_plugin_ai.common import graph
+from odev.plugins.odev_plugin_ai.common.llm_prompt import LLMPrompt
 
 
 logger = logging.getLogger(__name__)
-
-# Type alias for context items: each item is a dict with 'type' key and either 'text' or 'image_url'
-ContextItem = dict[str, str | dict[str, str]]
-
-
-class Context(list):
-    """A list-like object that holds context files and can format them for different LLMs."""
-
-    def __init__(self) -> None:
-        super().__init__()
-        self._files: list[dict[str, str]] = []
-
-    def add_file(self, module_name: str, relative_path: str, content: str) -> None:
-        """Add a file to the context."""
-        self._files.append({"module": module_name, "path": relative_path, "content": content})
-        # Default representation (Text)
-        self.extend(
-            [
-                {
-                    "type": "text",
-                    "text": f"{module_name}/{relative_path}",
-                },
-                {
-                    "type": "text",
-                    "text": content,
-                },
-            ]
-        )
-
-    def format_for_llm(self, model_name: str) -> list[ContextItem]:
-        """Format the context for a specific LLM."""
-        formatted: list[ContextItem] = []
-        is_gemini = "gemini" in model_name.lower()
-
-        for file in self._files:
-            module = file["module"]
-            path = file["path"]
-            content = file["content"]
-
-            if is_gemini:
-                encoded_content = base64.b64encode(content.encode("utf-8")).decode("utf-8")
-                formatted.extend(
-                    [
-                        {
-                            "type": "text",
-                            "text": f"{module}/{path}",
-                        },
-                        {
-                            "type": "image_url",
-                            "image_url": {"url": f"data:text/plain;base64,{encoded_content}"},
-                        },
-                    ]
-                )
-            else:
-                # Text format for ChatGPT / others
-                formatted.extend(
-                    [
-                        {
-                            "type": "text",
-                            "text": f"{module}/{path}",
-                        },
-                        {
-                            "type": "text",
-                            "text": content,
-                        },
-                    ]
-                )
-        return formatted
 
 
 class OdooContext:
@@ -94,18 +26,18 @@ class OdooContext:
         """Initialize the OdooContext with the given process."""
         self.process: OdoobinProcess = process
 
-    def gather_po_context(self, po_content: str) -> Context:
+    def gather_po_context(self, po_content: str) -> LLMPrompt:
         """Gathers context from files referenced in PO file content.
 
         It looks for lines like `#: code:path/to/file:line_number`,
         extracts the unique file paths, reads their content, and returns
-        it in a Context object.
+        it in a LLMPrompt object.
 
         :param po_content: The string content of a PO file.
-        :return: A Context object containing the gathered files.
+        :return: A LLMPrompt object containing the gathered files.
         """
         module_names = []
-        context: Context = Context()
+        context: LLMPrompt = LLMPrompt()
 
         # Regex to find file paths in lines like `#: code:path/to/file:line_number`
         file_paths = re.findall(r"#: code:(.*?):\d+", po_content)
@@ -124,11 +56,11 @@ class OdooContext:
                         full_path = module_path / relative_file_path
 
             if full_path and full_path.exists() and module_name and module_path:
-                self._add_file_to_context(context, module_name, module_path, full_path)
+                context.add_file(f"{module_name}/{relative_file_path}", full_path.read_text())
             else:
                 logger.warning(f"Could not find context file: {file_path_str}")
 
-        logger.info(f"Gathered context from {len(context._files)} files in modules: {', '.join(set(module_names))}")
+        logger.info(f"Gathered context from files in modules: {', '.join(set(module_names))}")
 
         return context
 
@@ -161,7 +93,7 @@ class OdooContext:
         analysis: dict[str, Any] | None = None,
         override_module_name: str = "",
         dependency_level: int = 0,
-    ) -> Context:
+    ) -> LLMPrompt:
         """Iterate over modules and gather context based on the analysis."""
         if not depends:
             logger.warning("No depends found on the analysis or provided as arguments. No context will be provided.")
@@ -174,7 +106,7 @@ class OdooContext:
         if depends:
             sorted_modules, module_paths = self._build_dependency_info(depends, dependency_level)
 
-        context: Context = Context()
+        context: LLMPrompt = LLMPrompt()
 
         for module_name in sorted_modules:
             if module_name in ["base", "web", "mail", "utm"]:
@@ -194,38 +126,19 @@ class OdooContext:
             self._gather_website_templates(context, module_name, module_path, analysis)
             self._gather_data(context, module_name, module_path)
 
-        logger.info(f"Gathered context from {len(context._files)} files in modules: {', '.join(set(sorted_modules))}")
+        logger.info(f"Gathered context from files in modules: {', '.join(set(sorted_modules))}")
 
         return context
 
-    def _add_file_to_context(
-        self,
-        context: Context,
-        module_name: str,
-        module_path: Path,
-        file_path: Path,
-        content: str | None = None,
-    ) -> None:
-        """Add a file's content to the context list."""
-        if content is None:
-            content = file_path.read_text()
-
-        try:
-            relative_path = str(file_path.relative_to(module_path))
-        except ValueError:
-            relative_path = file_path.name
-
-        context.add_file(module_name, relative_path, content)
-
-    def _gather_manifest(self, context: Context, module_name: str, module_path: Path) -> None:
+    def _gather_manifest(self, context: LLMPrompt, module_name: str, module_path: Path) -> None:
         """Gathers manifest file content."""
         manifest_path = module_path / "__manifest__.py"
         if manifest_path.exists():
-            self._add_file_to_context(context, module_name, module_path, manifest_path)
+            context.add_file(f"{module_name}/__manifest__.py", manifest_path.read_text())
 
     def _gather_models(
         self,
-        context: Context,
+        context: LLMPrompt,
         module_name: str,
         module_path: Path,
         analysis: dict[str, Any],
@@ -241,7 +154,7 @@ class OdooContext:
 
         try:
             init_content = init_py.read_text()
-            self._add_file_to_context(context, module_name, module_path, init_py, content=init_content)
+            context.add_file(f"{module_name}/{init_py.relative_to(module_path)}", init_content)
             loaded_py_files: list[Path] = []
             for line in init_content.splitlines():
                 match = re.match(r"^\s*from\s+\.\s+import\s+([\w, ]+)", line)
@@ -265,7 +178,7 @@ class OdooContext:
 
     def _process_model_file(
         self,
-        context: Context,
+        context: LLMPrompt,
         module_name: str,
         module_path: Path,
         py_file: Path,
@@ -306,12 +219,12 @@ class OdooContext:
                 not analysis_models and module_name == override_module_name
             ):
                 content = file_content if module_name == override_module_name else class_content
-                self._add_file_to_context(context, module_name, module_path, py_file, content=content)
+                context.add_file(f"{module_name}/{py_file.relative_to(module_path)}", content)
             i = j
 
     def _gather_views(
         self,
-        context: Context,
+        context: LLMPrompt,
         module_name: str,
         module_path: Path,
         analysis: dict[str, Any],
@@ -329,14 +242,17 @@ class OdooContext:
                 for record in tree.findall(".//record[@model='ir.ui.view']"):
                     model_field = record.find("./field[@name='model']")
                     if model_field is not None and model_field.text in analysis_view_models:
-                        self._add_file_to_context(context, module_name, module_path, xml_file, content=content)
+                        context.add_file(
+                            f"{module_name}/{xml_file.relative_to(module_path)}",
+                            content,
+                        )
                         break
             except (ET.ParseError, FileNotFoundError):
                 continue
 
     def _gather_controllers(
         self,
-        context: Context,
+        context: LLMPrompt,
         module_name: str,
         module_path: Path,
         analysis: dict[str, Any],
@@ -359,11 +275,11 @@ class OdooContext:
                 routes_in_file.extend(re.findall(r"['\"]([^'\"]+)['\"]", route_list))
 
             if analysis_routes.intersection(routes_in_file):
-                self._add_file_to_context(context, module_name, module_path, py_file, content=content)
+                context.add_file(f"{module_name}/{py_file.relative_to(module_path)}", content)
 
     def _gather_assets(
         self,
-        context: Context,
+        context: LLMPrompt,
         module_name: str,
         module_path: Path,
         analysis: dict[str, Any],
@@ -379,25 +295,28 @@ class OdooContext:
 
             potential_path = module_path / file_path_str
             if potential_path.exists():
-                self._add_file_to_context(context, module_name, module_path, potential_path)
+                context.add_file(
+                    f"{module_name}/{potential_path.relative_to(module_path)}",
+                    potential_path.read_text(),
+                )
             else:
                 # Fallback to search by filename
                 filename = Path(file_path_str).name
                 for f in module_path.rglob(filename):
-                    self._add_file_to_context(context, module_name, module_path, f)
+                    context.add_file(f"{module_name}/{f.relative_to(module_path)}", f.read_text())
                     break
 
-    def _gather_security(self, context: Context, module_name: str, module_path: Path) -> None:
+    def _gather_security(self, context: LLMPrompt, module_name: str, module_path: Path) -> None:
         """Gathers all files from the 'security' directory."""
         security_dir = module_path / "security"
         if security_dir.is_dir():
             for sec_file in security_dir.iterdir():
                 if sec_file.is_file() and (sec_file.name.endswith(".csv") or sec_file.name.endswith(".xml")):
-                    self._add_file_to_context(context, module_name, module_path, sec_file)
+                    context.add_file(f"{module_name}/security/{sec_file.name}", sec_file.read_text())
 
     def _gather_reports(
         self,
-        context: Context,
+        context: LLMPrompt,
         module_name: str,
         module_path: Path,
         analysis: dict[str, Any],
@@ -414,14 +333,17 @@ class OdooContext:
                 for record in tree.findall(".//record[@model='ir.actions.report']"):
                     model_field = record.find("./field[@name='model']")
                     if model_field is not None and model_field.text in report_models:
-                        self._add_file_to_context(context, module_name, module_path, xml_file, content=content)
+                        context.add_file(
+                            f"{module_name}/{xml_file.relative_to(module_path)}",
+                            content,
+                        )
                         break
             except (ET.ParseError, FileNotFoundError):
                 continue
 
     def _gather_website_templates(
         self,
-        context: Context,
+        context: LLMPrompt,
         module_name: str,
         module_path: Path,
         analysis: dict[str, Any],
@@ -438,15 +360,18 @@ class OdooContext:
                 for template in tree.findall(".//template"):
                     template_id = template.get("id")
                     if template_id and template_id in view_ids:
-                        self._add_file_to_context(context, module_name, module_path, xml_file, content=content)
+                        context.add_file(
+                            f"{module_name}/{xml_file.relative_to(module_path)}",
+                            content,
+                        )
                         break
             except (ET.ParseError, FileNotFoundError):
                 continue
 
-    def _gather_data(self, context: Context, module_name: str, module_path: Path) -> None:
+    def _gather_data(self, context: LLMPrompt, module_name: str, module_path: Path) -> None:
         """Gathers all XML data files from the 'data' directory."""
         data_dir = module_path / "data"
         if data_dir.is_dir():
             for data_file in data_dir.iterdir():
                 if data_file.is_file() and (data_file.name.endswith(".csv") or data_file.name.endswith(".xml")):
-                    self._add_file_to_context(context, module_name, module_path, data_file)
+                    context.add_file(f"{module_name}/data/{data_file.name}", data_file.read_text())

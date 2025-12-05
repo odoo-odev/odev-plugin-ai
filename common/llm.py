@@ -4,6 +4,8 @@ from odev.common import progress
 from odev.common.logging import logging
 from odev.common.mixins.framework import OdevFrameworkMixin
 
+from odev.plugins.odev_plugin_ai.common.llm_prompt import LLMPrompt
+
 
 logger = logging.getLogger(__name__)
 
@@ -54,40 +56,6 @@ class LLM(OdevFrameworkMixin):
         else:
             self.provider = model_identifier
 
-    def _format_messages_for_model(self, messages: list[dict[str, str]], model_name: str) -> list[dict[str, str]]:
-        """Format messages for a specific LLM model.
-
-        This method processes message content that may contain Context objects
-        with format_for_llm() methods, calling them to get model-specific formatting.
-
-        :param messages: The original list of messages.
-        :param model_name: The name of the model to format for.
-        :return: A new list of formatted messages.
-        """
-        formatted_messages = []
-        for msg in messages:
-            new_msg = msg.copy()
-            content = msg.get("content")
-
-            # Handle direct Context objects
-            if hasattr(content, "format_for_llm"):
-                new_msg["content"] = content.format_for_llm(model_name)
-            # Handle lists that may contain Context objects
-            elif isinstance(content, list):
-                formatted_content = []
-                for item in content:
-                    if hasattr(item, "format_for_llm"):
-                        # This is a Context object, format it and extend the list
-                        formatted_content.extend(item.format_for_llm(model_name))
-                    else:
-                        # Regular dict item, keep as-is
-                        formatted_content.append(item)
-                new_msg["content"] = formatted_content
-
-            formatted_messages.append(new_msg)
-
-        return formatted_messages
-
     def _get_model_list(self) -> list[str]:
         """Get the list of models to attempt based on configuration.
 
@@ -118,13 +86,13 @@ class LLM(OdevFrameworkMixin):
     def _try_model_completion(
         self,
         model_name: str,
-        messages: list[dict[str, str]],
+        prompt: LLMPrompt,
         response_format: type | None,
     ) -> str | None:
         """Attempt completion with a single model.
 
         :param model_name: The name of the model to try.
-        :param messages: The formatted messages for this model.
+        :param prompt: The LLMPrompt object containing the conversation.
         :param response_format: Optional response format specification.
         :return: The response content as a string, or None if the attempt failed.
         """
@@ -136,6 +104,9 @@ class LLM(OdevFrameworkMixin):
             RateLimitError,
             token_counter,
         )
+
+        # Convert LLMPrompt to messages for the specific model
+        messages = prompt.to_messages(model_name)
 
         logger.debug(f"Token counter : {token_counter(model=model_name, messages=messages)} tokens")
 
@@ -177,14 +148,14 @@ class LLM(OdevFrameworkMixin):
             return response.choices[0].message.content
         return None
 
-    def completion(self, messages: list[dict[str, str]], response_format: type | None = None) -> str | None:
+    def completion(self, prompt: LLMPrompt, response_format: type | None = None) -> str | None:
         """Send a completion request to the configured LLM and expect a structured response.
 
         If a specific model was provided during initialization, it will use that model.
         Otherwise, it iterates through a list of models for the configured provider,
         attempting each one until a successful structured response is obtained.
 
-        :param messages: A list of messages forming the conversation history for the prompt.
+        :param prompt: An LLMPrompt object containing the conversation.
         :return: The string content of the response, or `None` if all attempts fail.
         """
         # Reduce litellm's default logging verbosity
@@ -197,11 +168,9 @@ class LLM(OdevFrameworkMixin):
 
         for model_name in model_list:
             with progress.spinner(f"Calling {model_name} ..."):
-                current_messages = self._format_messages_for_model(messages, model_name)
-
                 result = self._try_model_completion(
                     model_name,
-                    current_messages,
+                    prompt,
                     response_format,
                 )
 
