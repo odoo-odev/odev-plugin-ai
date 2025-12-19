@@ -1,1 +1,2 @@
+defusedxml
 litellm>=1.76,<2
