@@ -16,5 +16,4 @@ __pycache__
 htmlcov
 
 # --- Odev plugins, loaded as submodules
-odev/plugins/*
 tests/plugins/*
