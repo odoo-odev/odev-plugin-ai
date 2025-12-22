@@ -112,6 +112,7 @@ class LLM(OdevFrameworkMixin):
 
         try:
             logger.debug(f"Attempting completion with model: '{model_name}'")
+            logger.debug(f"Prompt: {prompt.to_messages(model_name)}")
             litellm.suppress_debug_info = True
 
             response: ModelResponse = litellm.completion(

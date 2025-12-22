@@ -87,6 +87,42 @@ class OdooContext:
                 logger.warning(f"Could not find path for module '{module_name}'. It will be skipped.")
         return sorted_modules, module_paths
 
+    def get_dependency_modules(
+        self, depends: list[str], dependency_level: int = 0
+    ) -> tuple[list[str], dict[str, Path]]:
+        """Returns a list of module names and their paths based on dependencies."""
+        if not depends:
+            return [], {}
+        return self._build_dependency_info(depends, dependency_level)
+
+    def get_module_files(self, module_names: list[str], module_paths: dict[str, Path]) -> LLMPrompt:
+        """Loads all text files from the specified modules."""
+        context = LLMPrompt()
+        for module_name in module_names:
+            if module_name in ["base", "web", "mail", "utm"]:
+                continue
+
+            path = module_paths.get(module_name)
+            if not path:
+                continue
+
+            # Load all relevant files
+            # We skip some common trash
+            for file_path in path.rglob("*"):
+                if (
+                    file_path.is_file()
+                    and file_path.suffix in [".py", ".xml", ".csv", ".js"]
+                    and "__pycache__" not in file_path.parts
+                ):
+                    try:
+                        context.add_file(
+                            f"{module_name}/{file_path.relative_to(path)}",
+                            file_path.read_text(),
+                        )
+                    except Exception:  # noqa: S110
+                        continue
+        return context
+
     def gather_context(
         self,
         depends: list[str] | None = None,
