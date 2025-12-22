@@ -16,7 +16,7 @@ LLM_PROVIDER_LIST: dict = {
     "Gemini": {
         "flagship": "gemini/gemini-3-pro-preview",
         "stable": "gemini/gemini-2.5-pro",
-        "fast": "gemini/gemini-2.5-flash",
+        "fast": "gemini/gemini-3-flash-preview",
     },
     "Anthropic": {
         "flagship": "anthropic/claude-4-5-opus",
