@@ -92,8 +92,21 @@ class OdooContext:
     ) -> tuple[list[str], dict[str, Path]]:
         """Returns a list of module names and their paths based on dependencies."""
         if not depends:
-            return [], {}
+            return self._get_all_available_modules()
         return self._build_dependency_info(depends, dependency_level)
+
+    def _get_all_available_modules(self) -> tuple[list[str], dict[str, Path]]:
+        """Retrieve all available modules from the addons paths."""
+        module_paths: dict[str, Path] = {}
+        for addons_path in self.process.addons_paths:
+            if not addons_path.exists():
+                continue
+            for child in addons_path.iterdir():
+                if child.is_dir() and OdoobinProcess.check_addon_path(child):
+                    if child.name not in module_paths:
+                        module_paths[child.name] = child
+
+        return list(module_paths.keys()), module_paths
 
     def get_module_files(self, module_names: list[str], module_paths: dict[str, Path]) -> LLMPrompt:
         """Loads all text files from the specified modules."""
