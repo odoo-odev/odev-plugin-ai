@@ -551,7 +551,6 @@ class AgentCLI(OdevFrameworkMixin):
             ]
         )
 
-
         # Bind agent config and cache directories (Read-write)
         for path in agent_dirs:
             # Bind host path to sandbox home path
