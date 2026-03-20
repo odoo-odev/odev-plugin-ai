@@ -519,9 +519,6 @@ class AgentCLI(OdevFrameworkMixin):
                 "--ro-bind-try",
                 str(host_home / ".local/share/claude"),
                 str(host_home / ".local/share/claude"),
-                "--ro-bind-try",
-                str(host_home / ".config/google-chrome"),
-                str(host_home / ".config/google-chrome"),
             ]
         )
 
@@ -554,38 +551,6 @@ class AgentCLI(OdevFrameworkMixin):
             ]
         )
 
-        # Chrome / Chromium
-        cmd.extend(
-            [
-                "--ro-bind",
-                "/etc/alternatives",
-                "/etc/alternatives",
-                "--ro-bind-try",
-                "/opt/google/chrome",
-                "/opt/google/chrome",
-                "--ro-bind-try",
-                "/snap/bin",
-                "/snap/bin",
-                "--ro-bind-try",
-                "/snap/chromium",
-                "/snap/chromium",
-            ]
-        )
-
-        # Chrome fonts
-        cmd.extend(
-            [
-                "--ro-bind-try",
-                "/etc/fonts",
-                "/etc/fonts",
-                "--ro-bind-try",
-                str(host_home / ".fonts"),
-                str(host_home / ".fonts"),
-                "--ro-bind-try",
-                str(host_home / ".local/share/fonts"),
-                str(host_home / ".local/share/fonts"),
-            ]
-        )
 
         # Bind agent config and cache directories (Read-write)
         for path in agent_dirs:
