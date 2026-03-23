@@ -414,7 +414,7 @@ class AgentCLI(OdevFrameworkMixin):
         # Pass through relevant AI API keys
         relevant_keys = {
             "claude": ["ANTHROPIC_API_KEY"],
-            "gemini": ["GOOGLE_API_KEY"],
+            "gemini": ["GOOGLE_API_KEY", "GEMINI_API_KEY"],
             "copilot": [
                 "OPENAI_API_KEY",
                 "ANTHROPIC_API_KEY",
@@ -607,7 +607,6 @@ class AgentCLI(OdevFrameworkMixin):
             logger.info(f"Starting Project-wide AI execution using {self.cli}")
 
             from odev.common import bash
-            from odev.common.console import console
 
             # We use bash.stream to benefit from odev's pty/streaming logic
             # and ensure output is correctly displayed even in non-interactive modes.
@@ -618,10 +617,6 @@ class AgentCLI(OdevFrameworkMixin):
                 # to bwrap via a file descriptor using shell redirection.
                 with tempfile.NamedTemporaryFile(mode="wb", prefix="odev-ai-args-", delete=True) as f:
                     os.chmod(f.name, 0o600)
-                    # bwrap --args expects null-separated arguments
-                    args_data = "\0".join(cmd[1:]).encode() + b"\0"
-                    f.write(args_data)
-
                     # Add secrets securely to the file
                     for key, val in secrets_to_set:
                         f.write(f"--setenv\0{key}\0{val}\0".encode())
@@ -629,12 +624,13 @@ class AgentCLI(OdevFrameworkMixin):
                     f.flush()
 
                     # We use FD 3 for the arguments.
-                    # This indirection ensures that bwrap's argv only contains '--args 3'.
-                    full_cmd = f"bwrap --args 3 3<{shlex.quote(f.name)}"
-                    logger.debug(f"Running sandbox command: {full_cmd}")
+                    # This indirection ensures that secrets don't appear in ps.
+                    cmd_str = " ".join(shlex.quote(str(x)) for x in cmd[1:])
+                    bwrap_cmd = f"bwrap --args 3 3<{shlex.quote(f.name)} {cmd_str}"
+                    logger.debug(f"Running sandbox command: {bwrap_cmd}")
 
-                    for line in bash.stream(full_cmd):
-                        console.print(line)
+                    # Use bash.run to grant the command raw TTY access, supporting TUIs natively
+                    bash.run(bwrap_cmd)
             except subprocess.CalledProcessError as error:
                 returncode = error.returncode
 
