@@ -36,33 +36,46 @@ class OdooContext:
         :param po_content: The string content of a PO file.
         :return: A LLMPrompt object containing the gathered files.
         """
-        module_names = []
         context: LLMPrompt = LLMPrompt()
+        paths_by_module = self.gather_po_context_paths(po_content)
+
+        for module_name, files in paths_by_module.items():
+            for relative_path, full_path in files:
+                context.add_file(f"{module_name}/{relative_path}", full_path.read_text())
+
+        logger.info(f"Gathered context from files in modules: {', '.join(set(paths_by_module.keys()))}")
+
+        return context
+
+    def gather_po_context_paths(self, po_content: str) -> dict[str, list[tuple[Path, Path]]]:
+        """Gathers file paths referenced in PO file content.
+
+        It looks for lines like `#: code:path/to/file:line_number`,
+        extracts the unique file paths, and returns them grouped by module.
+
+        :param po_content: The string content of a PO file.
+        :return: A dictionary mapping module names to a list of (relative_path, full_path) tuples.
+        """
+        paths_by_module: dict[str, list[tuple[Path, Path]]] = {}
 
         # Regex to find file paths in lines like `#: code:path/to/file:line_number`
         file_paths = re.findall(r"#: code:(.*?):\d+", po_content)
         for file_path_str in set(file_paths):
-            full_path = None
-            module_name = None
-            module_path = None
             if file_path_str.startswith("addons/"):
                 path_parts = Path(file_path_str).parts
                 if len(path_parts) > 1:
                     module_name = path_parts[1]
-                    module_names.append(module_name)
                     module_path = graph._get_module_path(self.process, module_name)
                     if module_path:
-                        relative_file_path = Path(*path_parts[2:])
-                        full_path = module_path / relative_file_path
+                        relative_path = Path(*path_parts[2:])
+                        full_path = module_path / relative_path
+                        if full_path.exists():
+                            paths_by_module.setdefault(module_name, []).append((relative_path, full_path))
+                            continue
 
-            if full_path and full_path.exists() and module_name and module_path:
-                context.add_file(f"{module_name}/{relative_file_path}", full_path.read_text())
-            else:
-                logger.warning(f"Could not find context file: {file_path_str}")
+            logger.warning(f"Could not find context file: {file_path_str}")
 
-        logger.info(f"Gathered context from files in modules: {', '.join(set(module_names))}")
-
-        return context
+        return paths_by_module
 
     def _build_dependency_info(
         self, initial_depends: list[str], dependency_level: int
@@ -92,8 +105,21 @@ class OdooContext:
     ) -> tuple[list[str], dict[str, Path]]:
         """Returns a list of module names and their paths based on dependencies."""
         if not depends:
-            return [], {}
+            return self._get_all_available_modules()
         return self._build_dependency_info(depends, dependency_level)
+
+    def _get_all_available_modules(self) -> tuple[list[str], dict[str, Path]]:
+        """Retrieve all available modules from the addons paths."""
+        module_paths: dict[str, Path] = {}
+        for addons_path in self.process.addons_paths:
+            if not addons_path.exists():
+                continue
+            for child in addons_path.iterdir():
+                if child.is_dir() and OdoobinProcess.check_addon_path(child):
+                    if child.name not in module_paths:
+                        module_paths[child.name] = child
+
+        return list(module_paths.keys()), module_paths
 
     def get_module_files(self, module_names: list[str], module_paths: dict[str, Path]) -> LLMPrompt:
         """Loads all text files from the specified modules."""
