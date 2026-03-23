@@ -4,6 +4,7 @@ from pathlib import Path
 
 from odev.common import args
 from odev.common.commands import DatabaseCommand
+from odev.common.errors.commands import CommandError
 from odev.common.logging import logging
 
 from odev.plugins.odev_plugin_ai.common.mixins import AICommandMixin
@@ -38,7 +39,7 @@ class AICommand(DatabaseCommand, AICommandMixin):
     def infer_database_instance(self):
         try:
             return super().infer_database_instance()
-        except Exception:
+        except CommandError:
             from odev.common.databases import DummyDatabase
 
             return DummyDatabase()

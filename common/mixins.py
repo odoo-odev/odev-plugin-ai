@@ -1,5 +1,14 @@
 """Common mixins for AI-related commands."""
 
+from typing import TYPE_CHECKING
+
+
+if TYPE_CHECKING:
+    from odev.common.odev import Odev
+    from odev.common.args import Namespace
+    from odev.common.config import Config
+    from odev.common.console import Console
+
 import shutil
 
 from odev.common import args
@@ -12,6 +21,12 @@ logger = logging.getLogger(__name__)
 
 
 class AICommandMixin:
+    if TYPE_CHECKING:
+        odev: "Odev"
+        args: "Namespace"
+        config: "Config"
+        console: "Console"
+
     """Mixin for commands that use AI agents.
 
     Provides common arguments: cli, model, llm, yolo.

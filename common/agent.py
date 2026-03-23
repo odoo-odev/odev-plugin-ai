@@ -1,6 +1,9 @@
 import os
 import re
+import shlex
+import shutil
 import subprocess
+import tempfile
 from pathlib import Path
 
 from odev.common.logging import logging
@@ -19,6 +22,20 @@ class AgentCLI(OdevFrameworkMixin):
         self.cli = cli
         self.model = model
         self.yolo = yolo
+
+    def _bind_paths(
+        self,
+        paths: list[Path],
+        seen_paths: set[Path],
+        dynamic_binds: list[tuple[Path, Path, bool]],
+        read_only: bool = True,
+    ):
+        """Helper to bind multiple paths to the sandbox while avoiding duplicates."""
+        for p in paths:
+            p = p.resolve()
+            if p.exists() and p not in seen_paths:
+                dynamic_binds.append((p, p, read_only))
+                seen_paths.add(p)
 
     def _display_sandbox_warning(
         self,
@@ -56,8 +73,8 @@ class AgentCLI(OdevFrameworkMixin):
         console.print("\n[bold color.cyan]BINDINGS (System/Config):[/bold color.cyan]")
         # Group similar binds
         important_binds = []
-        for d in agent_dirs:
-            important_binds.append(f"{d} (RW)")
+        for adir in agent_dirs:
+            important_binds.append(f"{adir} (RW)")
         for f in agent_files:
             if f.exists():
                 important_binds.append(f"{f} (RW)")
@@ -86,8 +103,7 @@ class AgentCLI(OdevFrameworkMixin):
     ) -> bool:
         """Run the AI agent within a bwrap sandbox."""
         host_home = Path.home()
-        import shutil
-        import tempfile
+        host_home = Path.home()
 
         playground = Path(tempfile.mkdtemp(prefix=f"odev-ai-{self.cli}-"))
 
@@ -223,6 +239,7 @@ class AgentCLI(OdevFrameworkMixin):
             dynamic_binds.append((gitconfig, host_home / ".gitconfig", True))
             seen_paths.add(gitconfig)
 
+        from odev.common.odoobin import odoo_repositories
         from odev.common.python import PythonEnv
 
         odev_venv_path = PythonEnv().path.resolve()
@@ -256,8 +273,6 @@ class AgentCLI(OdevFrameworkMixin):
 
         # Explicit version binding — bind Odoo repos/worktrees and venv for a given version
         if version:
-            from odev.common.odoobin import odoo_repositories
-            from odev.common.python import PythonEnv
 
             ver_obj = OdooVersion(version)
             ver_str = str(ver_obj)  # e.g. "19.0"
@@ -298,8 +313,6 @@ class AgentCLI(OdevFrameworkMixin):
                 if version_detected:
                     logger.debug(f"Detected Odoo version {version_detected} for directory {path}")
                     ver_str_d = str(version_detected)
-                    from odev.common.odoobin import odoo_repositories
-                    from odev.common.python import PythonEnv
 
                     # Bind venv
                     venv_path = PythonEnv(ver_str_d).path.resolve()
@@ -333,25 +346,14 @@ class AgentCLI(OdevFrameworkMixin):
             self.config.paths.repositories / "odoo",
         ]
 
-        # Bind all enabled plugins. Since these are symlinked, we need to bind the
-        # resolved paths to ensure the repositories are accessible in the sandbox.
         for plugin in self.odev.plugins:
             ro_common_paths.append(plugin.path)
 
-        for p in rw_common_paths:
-            p = p.resolve()
-            if p.exists() and p not in seen_paths:
-                dynamic_binds.append((p, p, False))  # RW
-                seen_paths.add(p)
+        self._bind_paths(rw_common_paths, seen_paths, dynamic_binds, read_only=False)
+        self._bind_paths(ro_common_paths, seen_paths, dynamic_binds, read_only=True)
 
-        for p in ro_common_paths:
-            p = p.resolve()
-            if p.exists() and p not in seen_paths:
-                dynamic_binds.append((p, p, True))  # RO
-                seen_paths.add(p)
-
-        for d in agent_dirs:
-            d.mkdir(parents=True, exist_ok=True)
+        for adir in agent_dirs:
+            adir.mkdir(parents=True, exist_ok=True)
 
         cmd = ["bwrap"]
 
@@ -422,6 +424,10 @@ class AgentCLI(OdevFrameworkMixin):
 
         keys_to_process = relevant_keys.get(self.cli, [])
 
+        # Collect AI API keys for secure passing via bwrap --args FD.
+        # We don't add them directly to 'cmd' yet to avoid exposure in logs.
+        secrets_to_set = []
+
         from odev.common.store.datastore import DataStore
 
         secrets = DataStore().secrets
@@ -443,7 +449,7 @@ class AgentCLI(OdevFrameworkMixin):
                     pass
 
             if val:
-                cmd.extend(["--setenv", key, val])
+                secrets_to_set.append((key, val))
 
         if database:
             cmd.extend(["--setenv", "PGDATABASE", database])
@@ -574,15 +580,15 @@ class AgentCLI(OdevFrameworkMixin):
             cmd.extend([flag, str(src), str(dst)])
 
         # Bind allowed directories (sandbox)
-        for path in sandbox_dirs:
-            path_obj = Path(path).resolve()
+        for sdir in sandbox_dirs:
+            path_obj = Path(sdir).resolve()
             # Ensure destination parent directory exists in the playground
             relative_dst = path_obj.relative_to(host_home) if path_obj.is_relative_to(host_home) else None
             if relative_dst:
                 sandbox_dst_parent = (playground / relative_dst).parent
                 sandbox_dst_parent.mkdir(parents=True, exist_ok=True)
 
-            cmd.extend(["--bind-try", str(path), str(path)])
+            cmd.extend(["--bind-try", str(sdir), str(sdir)])
 
         # Execute the respective agent
         cmd.append("--")
@@ -599,9 +605,40 @@ class AgentCLI(OdevFrameworkMixin):
             ):
                 return False
             logger.info(f"Starting Project-wide AI execution using {self.cli}")
-            logger.debug(f"Running sandbox command: {' '.join(cmd)}")
-            result = subprocess.run(cmd)
-            return result.returncode == 0
+
+            from odev.common import bash
+            from odev.common.console import console
+
+            # We use bash.stream to benefit from odev's pty/streaming logic
+            # and ensure output is correctly displayed even in non-interactive modes.
+            returncode = 0
+            try:
+                # To prevent secrets (like API keys) from appearing in process listings (ps),
+                # we write the bwrap arguments to a temporary protected file and pass them
+                # to bwrap via a file descriptor using shell redirection.
+                with tempfile.NamedTemporaryFile(mode="wb", prefix="odev-ai-args-", delete=True) as f:
+                    os.chmod(f.name, 0o600)
+                    # bwrap --args expects null-separated arguments
+                    args_data = "\0".join(cmd[1:]).encode() + b"\0"
+                    f.write(args_data)
+
+                    # Add secrets securely to the file
+                    for key, val in secrets_to_set:
+                        f.write(f"--setenv\0{key}\0{val}\0".encode())
+
+                    f.flush()
+
+                    # We use FD 3 for the arguments.
+                    # This indirection ensures that bwrap's argv only contains '--args 3'.
+                    full_cmd = f"bwrap --args 3 3<{shlex.quote(f.name)}"
+                    logger.debug(f"Running sandbox command: {full_cmd}")
+
+                    for line in bash.stream(full_cmd):
+                        console.print(line)
+            except subprocess.CalledProcessError as error:
+                returncode = error.returncode
+
+            return returncode == 0
         except Exception as e:
             logger.error(f"Failed to run {self.cli}: {e}")
             return False
