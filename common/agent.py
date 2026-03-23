@@ -414,7 +414,7 @@ class AgentCLI(OdevFrameworkMixin):
         # Pass through relevant AI API keys
         relevant_keys = {
             "claude": ["ANTHROPIC_API_KEY"],
-            "gemini": ["GOOGLE_API_KEY"],
+            "gemini": ["GOOGLE_API_KEY", "GEMINI_API_KEY"],
             "copilot": [
                 "OPENAI_API_KEY",
                 "ANTHROPIC_API_KEY",
