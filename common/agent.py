@@ -144,10 +144,9 @@ class AgentCLI(OdevFrameworkMixin):
                 [
                     "--allow-tool=read",
                     "--allow-tool=write",
-                    "--allow-tool=shell(ruff:*)",
-                    "--allow-tool=shell(xmllint:*)",
                     "--allow-tool=shell(odev:*)",
                     "--allow-tool=shell(git:*)",
+                    "--allow-tool=shell(pre-commit:*)",
                 ]
             )
             if self.model:
@@ -158,6 +157,7 @@ class AgentCLI(OdevFrameworkMixin):
                 [
                     host_home / ".config/github-copilot",
                     host_home / ".config/gh-copilot",
+                    host_home / ".config/gh",
                 ]
             )
 
@@ -190,7 +190,7 @@ class AgentCLI(OdevFrameworkMixin):
                     "--permission-mode",
                     "acceptEdits",
                     "--allowedTools",
-                    "Bash(ruff:*),Bash(xmllint:*),Bash(odev:*),Bash(git:*),Read,Edit",
+                    "Bash(odev:*),Bash(git:*),Bash(pre-commit:*),Read,Edit",
                 ]
             )
             if self.model:
@@ -414,8 +414,10 @@ class AgentCLI(OdevFrameworkMixin):
         # Pass through relevant AI API keys
         relevant_keys = {
             "claude": ["ANTHROPIC_API_KEY"],
-            "gemini": ["GOOGLE_API_KEY", "GEMINI_API_KEY"],
+            "gemini": ["GOOGLE_API_KEY"],
             "copilot": [
+                "GITHUB_TOKEN",
+                "GH_TOKEN",
                 "OPENAI_API_KEY",
                 "ANTHROPIC_API_KEY",
             ],  # Copilot sometimes uses these
@@ -423,6 +425,16 @@ class AgentCLI(OdevFrameworkMixin):
         }
 
         keys_to_process = relevant_keys.get(self.cli, [])
+
+        # Automatically try to fetch GITHUB_TOKEN if using copilot and missing
+        if self.cli == "copilot" and not os.environ.get("GITHUB_TOKEN") and not os.environ.get("GH_TOKEN"):
+            try:
+                token = subprocess.check_output(["gh", "auth", "token"], text=True, stderr=subprocess.DEVNULL).strip()
+                if token:
+                    os.environ["GITHUB_TOKEN"] = token
+                    logger.debug("Automatically retrieved GITHUB_TOKEN for copilot")
+            except Exception:
+                pass
 
         # Collect AI API keys for secure passing via bwrap --args FD.
         # We don't add them directly to 'cmd' yet to avoid exposure in logs.
@@ -436,11 +448,20 @@ class AgentCLI(OdevFrameworkMixin):
             val = os.environ.get(key)
             if not val:
                 try:
+                    # Only prompt for the key if it's the primary one or if no other key was found yet.
+                    # For copilot, we don't want to prompt for all optional providers.
+                    is_optional = self.cli == "copilot" and key in [
+                        "GH_TOKEN",
+                        "OPENAI_API_KEY",
+                        "ANTHROPIC_API_KEY",
+                    ]
+                    ask = not is_optional and not secrets_to_set
+
                     # SecretStore.get(key, ask_missing=True) will prompt if missing
                     # We specify fields=["password"] to ensure it's masked as a secret
                     secret_obj = secrets.get(
                         key,
-                        ask_missing=True,
+                        ask_missing=ask,
                         fields=["password"],
                         prompt_format="{key}:",
                     )
@@ -607,6 +628,7 @@ class AgentCLI(OdevFrameworkMixin):
             logger.info(f"Starting Project-wide AI execution using {self.cli}")
 
             from odev.common import bash
+            from odev.common.console import console
 
             # We use bash.stream to benefit from odev's pty/streaming logic
             # and ensure output is correctly displayed even in non-interactive modes.
@@ -617,6 +639,10 @@ class AgentCLI(OdevFrameworkMixin):
                 # to bwrap via a file descriptor using shell redirection.
                 with tempfile.NamedTemporaryFile(mode="wb", prefix="odev-ai-args-", delete=True) as f:
                     os.chmod(f.name, 0o600)
+                    # bwrap --args expects null-separated arguments
+                    args_data = "\0".join(cmd[1:]).encode() + b"\0"
+                    f.write(args_data)
+
                     # Add secrets securely to the file
                     for key, val in secrets_to_set:
                         f.write(f"--setenv\0{key}\0{val}\0".encode())
@@ -624,13 +650,12 @@ class AgentCLI(OdevFrameworkMixin):
                     f.flush()
 
                     # We use FD 3 for the arguments.
-                    # This indirection ensures that secrets don't appear in ps.
-                    cmd_str = " ".join(shlex.quote(str(x)) for x in cmd[1:])
-                    bwrap_cmd = f"bwrap --args 3 3<{shlex.quote(f.name)} {cmd_str}"
-                    logger.debug(f"Running sandbox command: {bwrap_cmd}")
+                    # This indirection ensures that bwrap's argv only contains '--args 3'.
+                    full_cmd = f"bwrap --args 3 3<{shlex.quote(f.name)}"
+                    logger.debug(f"Running sandbox command: {full_cmd}")
 
-                    # Use bash.run to grant the command raw TTY access, supporting TUIs natively
-                    bash.run(bwrap_cmd)
+                    for line in bash.stream(full_cmd):
+                        console.print(line)
             except subprocess.CalledProcessError as error:
                 returncode = error.returncode
 
