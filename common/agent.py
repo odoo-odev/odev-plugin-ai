@@ -32,7 +32,8 @@ class AgentCLI(OdevFrameworkMixin):
     ):
         """Helper to bind multiple paths to the sandbox while avoiding duplicates."""
         for p in paths:
-            p = p.resolve()
+            # Robustly ensure p is a Path object before calling resolve()
+            p = Path(p).resolve()
             if p.exists() and p not in seen_paths:
                 dynamic_binds.append((p, p, read_only))
                 seen_paths.add(p)
@@ -67,6 +68,7 @@ class AgentCLI(OdevFrameworkMixin):
         if database:
             console.print(f" • Database: [color.purple]{database}[/color.purple]")
             console.print(f" • User:     [color.purple]{db_user or 'default'}[/color.purple]")
+
         else:
             console.print(" • None")
 
@@ -87,7 +89,7 @@ class AgentCLI(OdevFrameworkMixin):
         for bind in sorted(set(important_binds)):
             console.print(f" • {bind}")
 
-        console.print("\n" + "─" * 80 + "\n")
+        # console.print("\n" + "─" * 80 + "\n")
 
         if not self.yolo and not console.bypass_prompt:
             return console.confirm("Do you want to proceed with this AI agent execution?", default=True)
@@ -100,12 +102,14 @@ class AgentCLI(OdevFrameworkMixin):
         database: str | None = None,
         db_user: str | None = None,
         version: str | None = None,
+        resume: str | None = None,
     ) -> bool:
         """Run the AI agent within a bwrap sandbox."""
         host_home = Path.home()
-        host_home = Path.home()
 
         playground = Path(tempfile.mkdtemp(prefix=f"odev-ai-{self.cli}-"))
+        sandbox_tmp = Path(tempfile.mkdtemp(prefix=f"odev-ai-tmp-{self.cli}-"))
+        proxy_dir = Path(tempfile.mkdtemp(prefix="odev-ai-pg-"))
 
         agent_cmd = []
         # agent_dirs and agent_files will be bound read-write from the host
@@ -122,6 +126,8 @@ class AgentCLI(OdevFrameworkMixin):
             agent_cmd = ["gemini"]
             if prompt:
                 agent_cmd.extend(["-i", prompt])
+            if resume:
+                agent_cmd.extend(["--resume", resume])
             agent_cmd.append("--approval-mode")
             agent_cmd.append("yolo" if self.yolo else "auto_edit")
             if self.model:
@@ -140,6 +146,8 @@ class AgentCLI(OdevFrameworkMixin):
             agent_cmd = ["copilot"]
             if prompt:
                 agent_cmd.extend(["-i", prompt])
+            if resume:
+                agent_cmd.append(f"--resume={resume}")
             agent_cmd.extend(
                 [
                     "--allow-tool=read",
@@ -170,6 +178,8 @@ class AgentCLI(OdevFrameworkMixin):
             agent_cmd.extend([str(opencode_bin), "run"])
             if prompt:
                 agent_cmd.append(prompt)
+            if resume:
+                agent_cmd.extend(["--session", resume])
             if self.model:
                 agent_cmd.extend(["-m", self.model])
 
@@ -185,6 +195,8 @@ class AgentCLI(OdevFrameworkMixin):
             agent_cmd = ["claude"]
             if prompt:
                 agent_cmd.append(prompt)
+            if resume:
+                agent_cmd.extend(["--session-id", resume])
             agent_cmd.extend(
                 [
                     "--permission-mode",
@@ -242,7 +254,7 @@ class AgentCLI(OdevFrameworkMixin):
         from odev.common.odoobin import odoo_repositories
         from odev.common.python import PythonEnv
 
-        odev_venv_path = PythonEnv().path.resolve()
+        odev_venv_path = Path(PythonEnv().path).resolve()
         if odev_venv_path.exists() and odev_venv_path not in seen_paths:
             dynamic_binds.append((odev_venv_path, odev_venv_path, True))
             seen_paths.add(odev_venv_path)
@@ -255,14 +267,14 @@ class AgentCLI(OdevFrameworkMixin):
                 if db_version:
                     logger.debug(f"Detected Odoo version {db_version} for database {database}")
                     # Bind venv from database
-                    venv_path = db.venv.path.resolve()
+                    venv_path = Path(db.venv.path).resolve()
                     if venv_path.exists() and venv_path not in seen_paths:
                         dynamic_binds.append((venv_path, venv_path, True))  # RO
                         seen_paths.add(venv_path)
 
                     # Bind all Odoo worktrees for this version/database
                     for worktree in db.worktrees:
-                        w_path = worktree.path.resolve()
+                        w_path = Path(worktree.path).resolve()
                         if w_path.exists() and w_path not in seen_paths:
                             dynamic_binds.append((w_path, w_path, True))  # RO
                             seen_paths.add(w_path)
@@ -273,11 +285,10 @@ class AgentCLI(OdevFrameworkMixin):
 
         # Explicit version binding — bind Odoo repos/worktrees and venv for a given version
         if version:
-
             ver_obj = OdooVersion(version)
             ver_str = str(ver_obj)  # e.g. "19.0"
             # Bind venv for this version
-            venv_path = PythonEnv(ver_str).path.resolve()
+            venv_path = Path(PythonEnv(ver_str).path).resolve()
             if venv_path.exists() and venv_path not in seen_paths:
                 dynamic_binds.append((venv_path, venv_path, True))  # RO
                 seen_paths.add(venv_path)
@@ -286,7 +297,7 @@ class AgentCLI(OdevFrameworkMixin):
             for repo in odoo_repositories(enterprise=True):
                 for worktree in repo.worktrees():
                     if worktree.name == ver_str:
-                        w_path = worktree.path.resolve()
+                        w_path = Path(worktree.path).resolve()
                         if w_path.exists() and w_path not in seen_paths:
                             dynamic_binds.append((w_path, w_path, True))  # RO
                             seen_paths.add(w_path)
@@ -315,7 +326,7 @@ class AgentCLI(OdevFrameworkMixin):
                     ver_str_d = str(version_detected)
 
                     # Bind venv
-                    venv_path = PythonEnv(ver_str_d).path.resolve()
+                    venv_path = Path(PythonEnv(ver_str_d).path).resolve()
                     if venv_path.exists() and venv_path not in seen_paths:
                         dynamic_binds.append((venv_path, venv_path, True))  # RO
                         seen_paths.add(venv_path)
@@ -324,7 +335,7 @@ class AgentCLI(OdevFrameworkMixin):
                     for repo in odoo_repositories(enterprise=True):
                         for worktree in repo.worktrees():
                             if worktree.name == ver_str_d:
-                                w_path = worktree.path.resolve()
+                                w_path = Path(worktree.path).resolve()
                                 if w_path.exists() and w_path not in seen_paths:
                                     dynamic_binds.append((w_path, w_path, True))  # RO
                                     seen_paths.add(w_path)
@@ -346,8 +357,9 @@ class AgentCLI(OdevFrameworkMixin):
             self.config.paths.repositories / "odoo",
         ]
 
-        for plugin in self.odev.plugins:
-            ro_common_paths.append(plugin.path)
+        # Group plugin paths by their parent to avoid binding each one individually
+        for parent in sorted({p.path.parent for p in self.odev.plugins}):
+            ro_common_paths.append(parent)
 
         self._bind_paths(rw_common_paths, seen_paths, dynamic_binds, read_only=False)
         self._bind_paths(ro_common_paths, seen_paths, dynamic_binds, read_only=True)
@@ -370,17 +382,12 @@ class AgentCLI(OdevFrameworkMixin):
             ]
         )
 
-        # Database access: we restrict only by setting PGDATABASE.
-        # We do NOT set PGUSER to a temp role because PostgreSQL peer auth
-        # requires a matching OS user, and synthetic roles cannot authenticate
-        # via Unix socket.
-        # The odev process inside the sandbox runs as the real OS user (crupuk)
-        # which already has the correct privileges.
-
         cmd.extend(
             [
                 "--dir",
                 "/home",
+                "--dir",
+                str(host_home),
                 "--bind",
                 str(playground),
                 str(host_home),
@@ -438,11 +445,11 @@ class AgentCLI(OdevFrameworkMixin):
 
         # Collect AI API keys for secure passing via bwrap --args FD.
         # We don't add them directly to 'cmd' yet to avoid exposure in logs.
-        secrets_to_set = []
+        secrets_to_set: list[tuple[str, str]] = []
 
         from odev.common.store.datastore import DataStore
 
-        secrets = DataStore().secrets
+        ds_secrets = DataStore().secrets
 
         for key in keys_to_process:
             val = os.environ.get(key)
@@ -459,7 +466,7 @@ class AgentCLI(OdevFrameworkMixin):
 
                     # SecretStore.get(key, ask_missing=True) will prompt if missing
                     # We specify fields=["password"] to ensure it's masked as a secret
-                    secret_obj = secrets.get(
+                    secret_obj = ds_secrets.get(
                         key,
                         ask_missing=ask,
                         fields=["password"],
@@ -524,7 +531,8 @@ class AgentCLI(OdevFrameworkMixin):
                 "/dev",
                 "--proc",
                 "/proc",
-                "--tmpfs",
+                "--bind",
+                str(sandbox_tmp),
                 "/tmp",
                 "--ro-bind-try",
                 "/etc/machine-id",
@@ -559,19 +567,29 @@ class AgentCLI(OdevFrameworkMixin):
                 "--unshare-all",
                 "--share-net",
                 "--die-with-parent",
-                "--new-session",
             ]
         )
 
         # Odoo and system specific binds
+        if database:
+            # Standard Mode: bind the real socket
+            cmd.extend(
+                [
+                    "--bind-try",
+                    "/var/run/postgresql",
+                    "/var/run/postgresql",
+                ]
+            )
+        else:
+            # If no database is specified, we DO NOT give any PostgreSQL access by default.
+            # This prevents the agent from discovering or connecting to local databases.
+            logger.debug("No database specified: skipping PostgreSQL socket bind for strict isolation.")
+
         cmd.extend(
             [
                 "--bind-try",
                 str(host_home / ".local/share/Odoo"),
                 str(host_home / ".local/share/Odoo"),
-                "--bind-try",
-                "/var/run/postgresql",
-                "/var/run/postgresql",
                 "--ro-bind",
                 "/etc/passwd",
                 "/etc/passwd",
@@ -625,10 +643,9 @@ class AgentCLI(OdevFrameworkMixin):
                 db_user=db_user,
             ):
                 return False
-            logger.info(f"Starting Project-wide AI execution using {self.cli}")
+            logger.info(f"Starting Project-wide AI execution ({self.cli})")
 
             from odev.common import bash
-            from odev.common.console import console
 
             # We use bash.stream to benefit from odev's pty/streaming logic
             # and ensure output is correctly displayed even in non-interactive modes.
@@ -639,23 +656,29 @@ class AgentCLI(OdevFrameworkMixin):
                 # to bwrap via a file descriptor using shell redirection.
                 with tempfile.NamedTemporaryFile(mode="wb", prefix="odev-ai-args-", delete=True) as f:
                     os.chmod(f.name, 0o600)
-                    # bwrap --args expects null-separated arguments
-                    args_data = "\0".join(cmd[1:]).encode() + b"\0"
-                    f.write(args_data)
-
-                    # Add secrets securely to the file
+                    # bwrap --args expects null-separated arguments.
+                    # We ONLY put secrets in the FD to avoid "usage: bwrap" errors
+                    # on complex option sets (e.g. including --), while still keeping
+                    # secrets out of 'ps' listings.
                     for key, val in secrets_to_set:
                         f.write(f"--setenv\0{key}\0{val}\0".encode())
-
                     f.flush()
 
+                    # The rest of the arguments are passed on the command line.
+                    cmd_str = " ".join(shlex.quote(str(x)) for x in cmd[1:])
                     # We use FD 3 for the arguments.
-                    # This indirection ensures that bwrap's argv only contains '--args 3'.
-                    full_cmd = f"bwrap --args 3 3<{shlex.quote(f.name)}"
+                    # This indirection ensures that bwrap's argv only contains '--args 3'
+                    # followed by the quoted options/command.
+                    full_cmd = f"bwrap --args 3 {cmd_str} 3<{shlex.quote(f.name)}"
                     logger.debug(f"Running sandbox command: {full_cmd}")
 
-                    for line in bash.stream(full_cmd):
-                        console.print(line)
+                    from odev.common.console import console
+
+                    # Push content to scrollback to prevent loss if TUI clears screen
+                    console.print("\n" * (console.height or 20))
+
+                    # Use bash.run to grant the command raw TTY access, supporting TUIs natively.
+                    bash.run(full_cmd)
             except subprocess.CalledProcessError as error:
                 returncode = error.returncode
 
@@ -664,8 +687,52 @@ class AgentCLI(OdevFrameworkMixin):
             logger.error(f"Failed to run {self.cli}: {e}")
             return False
         finally:
-            # Cleanup playground
-            try:
-                shutil.rmtree(playground)
-            except Exception:
-                pass
+
+            # Cleanup playground, sandbox_tmp and proxy_dir
+            for path_to_clean in [playground, sandbox_tmp, proxy_dir]:
+                try:
+                    shutil.rmtree(path_to_clean)
+                except Exception:
+                    pass
+
+    def get_latest_session_id(self) -> str | None:
+        """Attempt to find the latest session ID for the current CLI."""
+        try:
+            if self.cli == "gemini":
+                # Use execute instead of run to capture output
+                from odev.common import bash
+
+                result = bash.execute("gemini --list-sessions")
+                if result and result.stdout:
+                    output = result.stdout.decode()
+                    import re
+
+                    match = re.search(r"\[([a-f0-9-]{36})\]", output)
+                    if match:
+                        return match.group(1)
+            elif self.cli == "claude":
+                history_path = Path.home() / ".claude" / "history.jsonl"
+                if history_path.exists():
+                    import json
+
+                    with open(history_path, "rb") as f:
+                        # Read the last few lines to find the latest session
+                        f.seek(0, 2)
+                        size = f.tell()
+                        f.seek(max(0, size - 4096))
+                        lines = f.read().decode(errors="ignore").splitlines()
+                        for line in reversed(lines):
+                            try:
+                                data = json.loads(line)
+                                if "sessionId" in data:
+                                    return data["sessionId"]
+                            except Exception:
+                                continue
+            elif self.cli == "copilot":
+                # For now, return 'latest'
+                return "latest"
+            elif self.cli == "opencode-cli":
+                return "latest"
+        except Exception as e:
+            logger.debug(f"Failed to get latest session ID for {self.cli}: {e}")
+        return None
