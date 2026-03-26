@@ -571,20 +571,6 @@ class AgentCLI(OdevFrameworkMixin):
         )
 
         # Odoo and system specific binds
-        if database:
-            # Standard Mode: bind the real socket
-            cmd.extend(
-                [
-                    "--bind-try",
-                    "/var/run/postgresql",
-                    "/var/run/postgresql",
-                ]
-            )
-        else:
-            # If no database is specified, we DO NOT give any PostgreSQL access by default.
-            # This prevents the agent from discovering or connecting to local databases.
-            logger.debug("No database specified: skipping PostgreSQL socket bind for strict isolation.")
-
         cmd.extend(
             [
                 "--bind-try",
@@ -593,6 +579,9 @@ class AgentCLI(OdevFrameworkMixin):
                 "--ro-bind",
                 "/etc/passwd",
                 "/etc/passwd",
+                "--bind-try",
+                "/var/run/postgresql",
+                "/var/run/postgresql",
             ]
         )
 
@@ -687,7 +676,6 @@ class AgentCLI(OdevFrameworkMixin):
             logger.error(f"Failed to run {self.cli}: {e}")
             return False
         finally:
-
             # Cleanup playground, sandbox_tmp and proxy_dir
             for path_to_clean in [playground, sandbox_tmp, proxy_dir]:
                 try:
@@ -705,8 +693,6 @@ class AgentCLI(OdevFrameworkMixin):
                 result = bash.execute("gemini --list-sessions")
                 if result and result.stdout:
                     output = result.stdout.decode()
-                    import re
-
                     match = re.search(r"\[([a-f0-9-]{36})\]", output)
                     if match:
                         return match.group(1)

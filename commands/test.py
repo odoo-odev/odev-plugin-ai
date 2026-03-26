@@ -1,3 +1,7 @@
+from pathlib import Path
+
+import requests
+
 from odev.commands.database.test import TestCommand as BaseTestCommand
 from odev.common import args, string
 from odev.common.logging import logging
@@ -23,18 +27,48 @@ class TestCommand(BaseTestCommand, AICommandMixin):
         if not self.args.ai:
             return super().run()
 
-        logger.info(string.stylize("Launching AI agent to run tests and fix failures...", "color.cyan"))
+        # Fetch auto-tags from Runbot
+        auto_tags = []
+        try:
+            logger.info("Fetching auto-tags from Runbot...")
+            response = requests.get("https://runbot.odoo.com/runbot/auto-tags", timeout=10)
+            auto_tags = [t.strip() for t in response.text.split(",") if t.strip()]
+
+            for tag in auto_tags:
+                if tag not in self.test_tags:
+                    self.test_tags.append(tag)
+        except Exception as error:
+            logger.warning(f"Could not fetch auto-tags: {error}")
+
+        logger.info("Running tests locally before launching AI agent...")
+        try:
+            super().run()
+            logger.info("Tests passed! No AI intervention needed.")
+            return
+        except RuntimeError:
+            if not self.test_buffer:
+                raise
+            logger.info("Tests failed. Capturing logs and launching AI agent...")
 
         # Reconstruct the command string for the AI agent
         args_to_pass = [a for a in self._argv if a not in ("--ai",)]
-        cmd_to_run = f"odev test {' '.join(args_to_pass)}"
+
+        if auto_tags:
+            args_to_pass.extend(["--test-tags", ",".join(auto_tags)])
+
+        cmd_to_run = f"odev test --no-pretty {' '.join(args_to_pass)}"
+
+        # Save failure logs to a file in the current directory
+        log_file = Path(".odev-test-failures.log").resolve()
+        log_file.write_text("\n".join(self.test_buffer))
 
         prompt = (
-            f"I want to run Odoo tests with the following command: `{cmd_to_run}`\n\n"
+            f"I ran Odoo tests with the following command: `{cmd_to_run}`\n\n"
+            f"The tests FAILED. I have captured the failure logs in the file: `{log_file.name}`\n\n"
             "Please:\n"
-            "1. Run the command.\n"
-            "2. If tests fail, analyze the failures and fix the code or the tests.\n"
-            "3. Repeat until all tests pass.\n"
+            f"1. Read `{log_file.name}` to understand the failures.\n"
+            "2. Analyze the failures and fix the code or the tests.\n"
+            "3. Verify your fixes by running the tests again (you can run specific tests to save time).\n"
             "4. Provide a summary of your changes."
         )
 
@@ -44,5 +78,8 @@ class TestCommand(BaseTestCommand, AICommandMixin):
         paths = set()
         if hasattr(self, "odoobin") and self.odoobin:
             paths.update([p.as_posix() for p in self.odoobin.addons_paths if p.exists()])
+
+        # Ensure the current directory (where the log file is) is also included
+        paths.add(Path.cwd().as_posix())
 
         agent.run(prompt, sandbox_dirs=list(paths), database=self.database_name)
