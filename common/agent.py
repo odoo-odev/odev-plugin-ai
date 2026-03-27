@@ -103,6 +103,7 @@ class AgentCLI(OdevFrameworkMixin):
         db_user: str | None = None,
         version: str | None = None,
         resume: str | None = None,
+        pg_socket_dir: Path | str | None = None,
     ) -> bool:
         """Run the AI agent within a bwrap sandbox."""
         host_home = Path.home()
@@ -570,6 +571,7 @@ class AgentCLI(OdevFrameworkMixin):
             ]
         )
 
+        pg_socket_src = str(pg_socket_dir) if pg_socket_dir else "/var/run/postgresql"
         # Odoo and system specific binds
         cmd.extend(
             [
@@ -580,7 +582,7 @@ class AgentCLI(OdevFrameworkMixin):
                 "/etc/passwd",
                 "/etc/passwd",
                 "--bind-try",
-                "/var/run/postgresql",
+                pg_socket_src,
                 "/var/run/postgresql",
             ]
         )
