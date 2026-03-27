@@ -89,8 +89,6 @@ class AgentCLI(OdevFrameworkMixin):
         for bind in sorted(set(important_binds)):
             console.print(f" • {bind}")
 
-        # console.print("\n" + "─" * 80 + "\n")
-
         if not self.yolo and not console.bypass_prompt:
             return console.confirm("Do you want to proceed with this AI agent execution?", default=True)
         return True
@@ -559,8 +557,9 @@ class AgentCLI(OdevFrameworkMixin):
         )
 
         # Unshare namespaces
-        # Set chdir to the first sandbox dir or current working dir
-        chdir_path = sandbox_dirs[0] if sandbox_dirs else str(Path.cwd())
+        # Set chdir to the current working directory if it's in sandbox_dirs, otherwise the first sandbox dir
+        cwd = Path.cwd().resolve().as_posix()
+        chdir_path = cwd if cwd in sandbox_dirs or not sandbox_dirs else sandbox_dirs[0]
         cmd.extend(
             [
                 "--chdir",

@@ -69,14 +69,4 @@ class RunCommand(BaseRunCommand, AICommandMixin):
             "4. Provide a summary of your changes."
         )
 
-        agent = self.get_ai_agent()
-
-        # Collect unique directories containing the addons
-        paths = set()
-        if self.odoobin:
-            paths.update([p.as_posix() for p in self.odoobin.addons_paths if p.exists()])
-
-        # Ensure the current directory (where the log file is) is also included
-        paths.add(Path.cwd().as_posix())
-
-        agent.run(prompt, sandbox_dirs=list(paths), database=self.database_name)
+        self.run_ai_agent(prompt, database=self.database_name)

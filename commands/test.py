@@ -3,7 +3,8 @@ from pathlib import Path
 import requests
 
 from odev.commands.database.test import TestCommand as BaseTestCommand
-from odev.common import args, string
+from odev.common import args
+from odev.common.errors import CommandError
 from odev.common.logging import logging
 
 from odev.plugins.odev_plugin_ai.common.mixins import AICommandMixin
@@ -45,7 +46,7 @@ class TestCommand(BaseTestCommand, AICommandMixin):
             super().run()
             logger.info("Tests passed! No AI intervention needed.")
             return
-        except RuntimeError:
+        except (RuntimeError, CommandError):
             if not self.test_buffer:
                 raise
             logger.info("Tests failed. Capturing logs and launching AI agent...")
@@ -72,14 +73,4 @@ class TestCommand(BaseTestCommand, AICommandMixin):
             "4. Provide a summary of your changes."
         )
 
-        agent = self.get_ai_agent()
-
-        # Collect unique directories containing the addons
-        paths = set()
-        if hasattr(self, "odoobin") and self.odoobin:
-            paths.update([p.as_posix() for p in self.odoobin.addons_paths if p.exists()])
-
-        # Ensure the current directory (where the log file is) is also included
-        paths.add(Path.cwd().as_posix())
-
-        agent.run(prompt, sandbox_dirs=list(paths), database=self.database_name)
+        self.run_ai_agent(prompt, database=self.database_name)

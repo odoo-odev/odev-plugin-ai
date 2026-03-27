@@ -9,6 +9,7 @@ if TYPE_CHECKING:
     from odev.common.config import Config
     from odev.common.console import Console
 
+from pathlib import Path
 import shutil
 
 from odev.common import args
@@ -99,3 +100,17 @@ class AICommandMixin:
             model=model,
             yolo=self.args.yolo,
         )
+
+    def run_ai_agent(self, prompt: str, database: str | None = None) -> bool:
+        """Helper to run the AI agent with common Odoo-related sandbox paths."""
+        agent = self.get_ai_agent()
+
+        # Collect unique directories containing the addons
+        paths = set()
+        if hasattr(self, "odoobin") and self.odoobin:
+            paths.update([p.as_posix() for p in self.odoobin.addons_paths if p.exists()])
+
+        # Ensure the current directory (where the log file might be) is also included
+        paths.add(Path.cwd().as_posix())
+
+        return agent.run(prompt, sandbox_dirs=list(paths), database=database)
