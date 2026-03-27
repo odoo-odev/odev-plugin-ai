@@ -9,8 +9,8 @@ if TYPE_CHECKING:
     from odev.common.config import Config
     from odev.common.console import Console
 
-from pathlib import Path
 import shutil
+from pathlib import Path
 
 from odev.common import args
 from odev.common.logging import logging

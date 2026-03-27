@@ -57,7 +57,7 @@ class TestCommand(BaseTestCommand, AICommandMixin):
         if auto_tags:
             args_to_pass.extend(["--test-tags", ",".join(auto_tags)])
 
-        cmd_to_run = f"odev test --no-pretty {' '.join(args_to_pass)}"
+        cmd_to_run = f"odev test {' '.join(args_to_pass)}"
 
         # Save failure logs to a file in the current directory
         log_file = Path(".odev-test-failures.log").resolve()
