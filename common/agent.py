@@ -97,6 +97,7 @@ class AgentCLI(OdevFrameworkMixin):
         self,
         prompt: str,
         sandbox_dirs: list[str],
+        extra_bind_dirs: list[str] | None = None,
         database: str | None = None,
         db_user: str | None = None,
         version: str | None = None,
@@ -608,16 +609,25 @@ class AgentCLI(OdevFrameworkMixin):
             flag = "--ro-bind-try" if read_only else "--bind-try"
             cmd.extend([flag, str(src), str(dst)])
 
-        # Bind allowed directories (sandbox)
-        for sdir in sandbox_dirs:
+        # Bind forbidden/extra directories (Read-only unless in sandbox_dirs)
+        for sdir in sorted(set(sandbox_dirs + (extra_bind_dirs or []))):
             path_obj = Path(sdir).resolve()
+            if not path_obj.exists():
+                continue
+
             # Ensure destination parent directory exists in the playground
-            relative_dst = path_obj.relative_to(host_home) if path_obj.is_relative_to(host_home) else None
+            relative_dst = (
+                path_obj.relative_to(host_home)
+                if path_obj.is_relative_to(host_home)
+                else None
+            )
             if relative_dst:
                 sandbox_dst_parent = (playground / relative_dst).parent
                 sandbox_dst_parent.mkdir(parents=True, exist_ok=True)
 
-            cmd.extend(["--bind-try", str(sdir), str(sdir)])
+            # Sandbox dirs are read-write, extra binds are read-only
+            flag = "--bind-try" if sdir in sandbox_dirs else "--ro-bind-try"
+            cmd.extend([flag, str(sdir), str(sdir)])
 
         # Execute the respective agent
         cmd.append("--")
@@ -628,7 +638,7 @@ class AgentCLI(OdevFrameworkMixin):
                 sandbox_dirs=sandbox_dirs,
                 agent_dirs=agent_dirs,
                 agent_files=agent_files,
-                dynamic_binds=dynamic_binds,
+                dynamic_binds=dynamic_binds + [(Path(d), Path(d), True) for d in (extra_bind_dirs or [])],
                 database=database,
                 db_user=db_user,
             ):
