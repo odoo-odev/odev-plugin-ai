@@ -616,11 +616,7 @@ class AgentCLI(OdevFrameworkMixin):
                 continue
 
             # Ensure destination parent directory exists in the playground
-            relative_dst = (
-                path_obj.relative_to(host_home)
-                if path_obj.is_relative_to(host_home)
-                else None
-            )
+            relative_dst = path_obj.relative_to(host_home) if path_obj.is_relative_to(host_home) else None
             if relative_dst:
                 sandbox_dst_parent = (playground / relative_dst).parent
                 sandbox_dst_parent.mkdir(parents=True, exist_ok=True)
