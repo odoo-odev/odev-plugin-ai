@@ -29,13 +29,21 @@ class AgentCLI(OdevFrameworkMixin):
         seen_paths: set[Path],
         dynamic_binds: list[tuple[Path, Path, bool]],
         read_only: bool = True,
+        path_mapping: dict[str, str] | None = None,
     ):
         """Helper to bind multiple paths to the sandbox while avoiding duplicates."""
         for p in paths:
             # Robustly ensure p is a Path object before calling resolve()
             p = Path(p).resolve()
             if p.exists() and p not in seen_paths:
-                dynamic_binds.append((p, p, read_only))
+                dst = p
+                if path_mapping:
+                    p_str = str(p)
+                    for host, guest in sorted(path_mapping.items(), key=lambda x: len(x[0]), reverse=True):
+                        if p_str.startswith(host):
+                            dst = Path(p_str.replace(host, guest))
+                            break
+                dynamic_binds.append((p, dst, read_only))
                 seen_paths.add(p)
 
     def _display_sandbox_warning(
@@ -103,6 +111,7 @@ class AgentCLI(OdevFrameworkMixin):
         version: str | None = None,
         resume: str | None = None,
         pg_socket_dir: Path | str | None = None,
+        path_mapping: dict[str, str] | None = None,
     ) -> bool:
         """Run the AI agent within a bwrap sandbox."""
         host_home = Path.home()
@@ -115,6 +124,25 @@ class AgentCLI(OdevFrameworkMixin):
         pg_process = None
 
         agent_cmd = []
+
+        # RTK (Rust Token Killer) detection and integration
+        rtk_path = shutil.which("rtk")
+        if rtk_path:
+            rtk_path_obj = Path(rtk_path).resolve()
+            logger.debug(f"Detected RTK at {rtk_path_obj}")
+            # Add RTK specific instructions to the prompt
+            rtk_info = (
+                "\n(Optimization: 'rtk' is installed in this environment. You should use it to "
+                "compress verbose terminal output when running high-volume commands like 'git', "
+                "'grep', 'cat', or tests to save tokens. Example: 'rtk git status' instead of 'git status'.)\n"
+            )
+            prompt += rtk_info
+        else:
+            logger.warning(
+                "RTK (Rust Token Killer) not found. It is highly recommended to install it to "
+                "reduce LLM token consumption. Setup: https://github.com/rtk-ai/rtk"
+            )
+
         # agent_dirs and agent_files will be bound read-write from the host
         agent_dirs = [
             host_home / f".{self.cli}",
@@ -156,6 +184,7 @@ class AgentCLI(OdevFrameworkMixin):
                 [
                     "--allow-tool=read",
                     "--allow-tool=write",
+                    "--allow-tool=shell(rtk:*)",
                     "--allow-tool=shell(odev:*)",
                     "--allow-tool=shell(git:*)",
                     "--allow-tool=shell(pre-commit:*)",
@@ -207,9 +236,24 @@ class AgentCLI(OdevFrameworkMixin):
                     "--permission-mode",
                     "acceptEdits",
                     "--allowedTools",
-                    "Bash(odev:*),Bash(git:*),Bash(pre-commit:*),Read,Edit",
+                    "Bash(rtk:*),Bash(odev:*),Bash(git:*),Bash(pre-commit:*),Read,Edit",
                 ]
             )
+            if rtk_path:
+                # Check for RTK hook in Claude Code settings
+                settings_path = host_home / ".claude" / "settings.json"
+                if settings_path.exists():
+                    try:
+                        import json
+
+                        settings = json.loads(settings_path.read_text())
+                        if "PreToolUse" not in settings or "rtk" not in str(settings["PreToolUse"]):
+                            logger.warning(
+                                "RTK is installed but not configured as a hook for Claude Code. "
+                                "Run 'rtk init --global' on your host for transparent command rewriting."
+                            )
+                    except Exception:
+                        pass
             if self.model and self.model != "auto":
                 agent_cmd.extend(["-m", self.model])
             for d in sandbox_dirs:
@@ -255,6 +299,9 @@ class AgentCLI(OdevFrameworkMixin):
                 else:
                     shutil.copy2(item, sandbox_config_dir / item.name)
 
+            if path_mapping:
+                self._rewrite_sandbox_config(sandbox_config_dir, path_mapping)
+
             # No need for a separate dynamic bind here, because the playground
             # is already bound to host_home in the bwrap command.
             # sandbox_config_dir/.config/odev will appear at host_home/.config/odev.
@@ -296,6 +343,16 @@ class AgentCLI(OdevFrameworkMixin):
                     # If no explicit version was given, use the one from database
                     if not version:
                         version = str(db_version)
+
+        # Bind rtk if found and not in a standard system path (already bound RO below)
+        if rtk_path:
+            # We already bind /usr and host_home/.local/bin RO below.
+            # If rtk is somewhere else, we need to bind it explicitly.
+            rtk_str = str(rtk_path_obj)
+            standard_paths = ["/usr", "/bin", "/sbin", "/lib", "/lib64", str(host_home / ".local/bin")]
+            if not any(rtk_str.startswith(p) for p in standard_paths):
+                dynamic_binds.append((rtk_path_obj, rtk_path_obj, True))
+                seen_paths.add(rtk_path_obj)
 
         # Explicit version binding — bind Odoo repos/worktrees and venv for a given version
         if version:
@@ -401,9 +458,12 @@ class AgentCLI(OdevFrameworkMixin):
         for parent in sorted(resolved_plugin_parents):
             ro_common_paths.append(parent)
 
-        self._bind_paths(rw_common_paths, seen_paths, dynamic_binds, read_only=False)
-        self._bind_paths(ro_common_paths, seen_paths, dynamic_binds, read_only=True)
-        self._bind_paths(repo_paths, seen_paths, dynamic_binds, read_only=True)
+        if path_mapping:
+            seen_paths.update({Path(h).resolve() for h in path_mapping})
+
+        self._bind_paths(rw_common_paths, seen_paths, dynamic_binds, read_only=False, path_mapping=path_mapping)
+        self._bind_paths(ro_common_paths, seen_paths, dynamic_binds, read_only=True, path_mapping=path_mapping)
+        self._bind_paths(repo_paths, seen_paths, dynamic_binds, read_only=True, path_mapping=path_mapping)
 
         for adir in agent_dirs:
             adir.mkdir(parents=True, exist_ok=True)
@@ -784,6 +844,21 @@ class AgentCLI(OdevFrameworkMixin):
                     shutil.rmtree(path_to_clean)
                 except Exception:
                     pass
+
+    def _rewrite_sandbox_config(self, sandbox_config_dir: Path, path_mapping: dict[str, str]):
+        """Rewrite the odev.cfg inside the sandbox to use virtualized paths."""
+        config_file = sandbox_config_dir / "odev.cfg"
+        if not config_file.exists():
+            return
+
+        logger.debug(f"Rewriting sandbox config {config_file} with mapping: {path_mapping}")
+        content = config_file.read_text()
+        for host_path, guest_path in path_mapping.items():
+            # Robustly handle trailing slashes and absolute paths
+            h = str(Path(host_path).resolve())
+            content = content.replace(h, guest_path)
+
+        config_file.write_text(content)
 
     def _clone_host_database(self, database: str, host_socket_dir: Path, ephemeral_socket_dir: Path):
         """Clone a host database into the ephemeral cluster."""
