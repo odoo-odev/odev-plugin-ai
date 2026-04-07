@@ -110,6 +110,9 @@ class AgentCLI(OdevFrameworkMixin):
         playground = Path(tempfile.mkdtemp(prefix=f"odev-ai-{self.cli}-"))
         sandbox_tmp = Path(tempfile.mkdtemp(prefix=f"odev-ai-tmp-{self.cli}-"))
         proxy_dir = Path(tempfile.mkdtemp(prefix="odev-ai-pg-"))
+        pg_data_dir = Path(tempfile.mkdtemp(prefix="odev-ai-pgdata-"))
+
+        pg_process = None
 
         agent_cmd = []
         # agent_dirs and agent_files will be bound read-write from the host
@@ -130,10 +133,11 @@ class AgentCLI(OdevFrameworkMixin):
                 agent_cmd.extend(["--resume", resume])
             agent_cmd.append("--approval-mode")
             agent_cmd.append("yolo" if self.yolo else "auto_edit")
-            if self.model:
+            if self.model and self.model != "auto":
                 agent_cmd.extend(["-m", self.model])
             for d in sandbox_dirs:
-                agent_cmd.extend(["--include-directories", str(d)])
+                agent_path = d.split(":", 1)[1] if ":" in d else d
+                agent_cmd.extend(["--include-directories", agent_path])
             agent_dirs.append(host_home / ".config/configstore")  # Specific to gemini
             agent_dirs.extend(
                 [
@@ -157,10 +161,11 @@ class AgentCLI(OdevFrameworkMixin):
                     "--allow-tool=shell(pre-commit:*)",
                 ]
             )
-            if self.model:
+            if self.model and self.model != "auto":
                 agent_cmd.extend(["-m", self.model])
             for d in sandbox_dirs:
-                agent_cmd.extend(["--add-dir", str(d)])
+                agent_path = d.split(":", 1)[1] if ":" in d else d
+                agent_cmd.extend(["--add-dir", agent_path])
             agent_dirs.extend(
                 [
                     host_home / ".config/github-copilot",
@@ -180,7 +185,7 @@ class AgentCLI(OdevFrameworkMixin):
                 agent_cmd.append(prompt)
             if resume:
                 agent_cmd.extend(["--session", resume])
-            if self.model:
+            if self.model and self.model != "auto":
                 agent_cmd.extend(["-m", self.model])
 
             agent_dirs.extend(
@@ -205,11 +210,20 @@ class AgentCLI(OdevFrameworkMixin):
                     "Bash(odev:*),Bash(git:*),Bash(pre-commit:*),Read,Edit",
                 ]
             )
-            if self.model:
+            if self.model and self.model != "auto":
                 agent_cmd.extend(["-m", self.model])
             for d in sandbox_dirs:
-                agent_cmd.extend(["--add-dir", str(d)])
+                agent_path = d.split(":", 1)[1] if ":" in d else d
+                agent_cmd.extend(["--add-dir", agent_path])
             agent_dirs.extend([host_home / ".claude", host_home / ".anthropic"])
+
+        if database:
+            db_info = (
+                f"(Environment: You have been granted access to a private, isolated CLONE of the host database '{database}'. "
+                "This is a separate, ephemeral PostgreSQL cluster. You can safely modify it as it "
+                "does not affect the live host data. Use 'psql' to work directly with it.)\n\n"
+            )
+            prompt = db_info + prompt
 
         from odev.common.databases.local import LocalDatabase
         from odev.common.odoobin import OdoobinProcess
@@ -276,7 +290,7 @@ class AgentCLI(OdevFrameworkMixin):
                     for worktree in db.worktrees:
                         w_path = Path(worktree.path).resolve()
                         if w_path.exists() and w_path not in seen_paths:
-                            dynamic_binds.append((w_path, w_path, True))  # RO
+                            dynamic_binds.append((w_path, w_path, True))
                             seen_paths.add(w_path)
 
                     # If no explicit version was given, use the one from database
@@ -295,17 +309,29 @@ class AgentCLI(OdevFrameworkMixin):
 
             # Bind all Odoo worktrees for this version
             for repo in odoo_repositories(enterprise=True):
+                # Also bind the repository path itself as some setups might
+                # use the main repo as an addons path.
+                r_path = Path(repo.path).resolve()
+                if r_path.exists() and r_path not in seen_paths:
+                    dynamic_binds.append((r_path, r_path, True))
+                    seen_paths.add(r_path)
+
                 for worktree in repo.worktrees():
                     if worktree.name == ver_str:
                         w_path = Path(worktree.path).resolve()
                         if w_path.exists() and w_path not in seen_paths:
-                            dynamic_binds.append((w_path, w_path, True))  # RO
+                            dynamic_binds.append((w_path, w_path, True))
                             seen_paths.add(w_path)
 
+        # Mark sandbox directories as "seen" immediately to prevent them from being
+        # overridden by subsequent default read-only bindings (like Odoo repos).
+        for sdir in sandbox_dirs:
+            src = sdir.split(":", 1)[0]
+            seen_paths.add(Path(src).resolve())
+
         # Detect Odoo version and bind venv/worktrees for each sandbox dir
-        # This block handles sandbox_dirs which might not be related to the database.
         for d in sandbox_dirs:
-            path = Path(d).resolve()
+            path = Path(d.split(":", 1)[0]).resolve()
             if not path.exists():
                 continue
             try:
@@ -337,7 +363,7 @@ class AgentCLI(OdevFrameworkMixin):
                             if worktree.name == ver_str_d:
                                 w_path = Path(worktree.path).resolve()
                                 if w_path.exists() and w_path not in seen_paths:
-                                    dynamic_binds.append((w_path, w_path, True))  # RO
+                                    dynamic_binds.append((w_path, w_path, True))
                                     seen_paths.add(w_path)
             except Exception as e:
                 logger.debug(f"Failed to detect Odoo version for {path}: {e}")
@@ -351,18 +377,33 @@ class AgentCLI(OdevFrameworkMixin):
         ro_common_paths = [
             self.odev.home_path / "worktrees",
             self.odev.home_path / "plugins",
-            # The main Odoo git repos must be bound so that git worktrees (stored under
-            # ~/odev/worktrees) can resolve their `.git` files which point back here.
-            # Without this, odev can't see the repos and triggers a fresh clone.
-            self.config.paths.repositories / "odoo",
         ]
 
-        # Group plugin paths by their parent to avoid binding each one individually
-        for parent in sorted({p.path.parent for p in self.odev.plugins}):
+        # The main Odoo git repos must be bound so that git worktrees (stored under
+        # ~/odev/worktrees) can resolve their `.git` files which point back here.
+        # Without this, odev can't see the repos and triggers a fresh clone.
+        # We bind them read-only to ensure core Odoo is never modified.
+        repo_paths = [self.config.paths.repositories / "odoo"]
+
+        # Resolve plugin symlinks to their actual source directories to ensure
+        # they are correctly bound into the sandbox. Group by parent to avoid
+        # excessive individual mounts.
+        resolved_plugin_parents = set()
+        for plugin in self.odev.plugins:
+            # Resolve the symlink to find the actual source directory
+            try:
+                resolved_path = plugin.path.resolve()
+                if resolved_path.exists():
+                    resolved_plugin_parents.add(resolved_path.parent)
+            except Exception as e:
+                logger.debug(f"Failed to resolve plugin path {plugin.path}: {e}")
+
+        for parent in sorted(resolved_plugin_parents):
             ro_common_paths.append(parent)
 
         self._bind_paths(rw_common_paths, seen_paths, dynamic_binds, read_only=False)
         self._bind_paths(ro_common_paths, seen_paths, dynamic_binds, read_only=True)
+        self._bind_paths(repo_paths, seen_paths, dynamic_binds, read_only=True)
 
         for adir in agent_dirs:
             adir.mkdir(parents=True, exist_ok=True)
@@ -560,18 +601,24 @@ class AgentCLI(OdevFrameworkMixin):
         # Unshare namespaces
         # Set chdir to the current working directory if it's in sandbox_dirs, otherwise the first sandbox dir
         cwd = Path.cwd().resolve().as_posix()
-        chdir_path = cwd if cwd in sandbox_dirs or not sandbox_dirs else sandbox_dirs[0]
+        if cwd in sandbox_dirs:
+            chdir_path = cwd
+        elif not sandbox_dirs:
+            chdir_path = str(host_home)
+        else:
+            first_dir = sandbox_dirs[0]
+            chdir_path = first_dir.split(":", 1)[1] if ":" in first_dir else first_dir
+
         cmd.extend(
             [
                 "--chdir",
-                str(chdir_path),
+                chdir_path,
                 "--unshare-all",
                 "--share-net",
                 "--die-with-parent",
             ]
         )
 
-        pg_socket_src = str(pg_socket_dir) if pg_socket_dir else "/var/run/postgresql"
         # Odoo and system specific binds
         cmd.extend(
             [
@@ -581,11 +628,40 @@ class AgentCLI(OdevFrameworkMixin):
                 "--ro-bind",
                 "/etc/passwd",
                 "/etc/passwd",
-                "--bind-try",
-                pg_socket_src,
-                "/var/run/postgresql",
             ]
         )
+
+        if database:
+            # Try to find the host PostgreSQL socket in common locations for cloning
+            if pg_socket_dir:
+                host_socket_dir = Path(pg_socket_dir)
+            else:
+                for path in [Path("/var/run/postgresql"), Path("/tmp")]:
+                    if any(path.glob(".s.PGSQL.*")):
+                        host_socket_dir = path
+                        break
+                else:
+                    host_socket_dir = Path("/var/run/postgresql")
+        else:
+            host_socket_dir = None
+
+        # ALWAYS start an ephemeral isolated cluster for physical isolation
+        pg_process = self._start_ephemeral_postgres(proxy_dir, pg_data_dir)
+        if pg_process:
+            # If a host database was specified, clone it into our ephemeral cluster
+            if database and host_socket_dir and host_socket_dir.exists():
+                self._clone_host_database(database, host_socket_dir, proxy_dir)
+
+            cmd.extend(
+                [
+                    "--bind",
+                    str(proxy_dir),
+                    "/var/run/postgresql",
+                    "--symlink",
+                    "/var/run/postgresql/.s.PGSQL.5432",
+                    "/tmp/.s.PGSQL.5432",
+                ]
+            )
 
         # Bind agent config and cache directories (Read-write)
         for path in agent_dirs:
@@ -611,19 +687,27 @@ class AgentCLI(OdevFrameworkMixin):
 
         # Bind forbidden/extra directories (Read-only unless in sandbox_dirs)
         for sdir in sorted(set(sandbox_dirs + (extra_bind_dirs or []))):
-            path_obj = Path(sdir).resolve()
-            if not path_obj.exists():
+            # Support src:dst syntax for extra_bind_dirs
+            if ":" in sdir:
+                src_path, dst_path = sdir.split(":", 1)
+                src_obj = Path(src_path).resolve()
+                dst_obj = Path(dst_path)  # Keep as is, it's relative to home/playground
+            else:
+                src_obj = Path(sdir).resolve()
+                dst_obj = src_obj
+
+            if not src_obj.exists():
                 continue
 
             # Ensure destination parent directory exists in the playground
-            relative_dst = path_obj.relative_to(host_home) if path_obj.is_relative_to(host_home) else None
+            relative_dst = dst_obj.relative_to(host_home) if dst_obj.is_relative_to(host_home) else None
             if relative_dst:
                 sandbox_dst_parent = (playground / relative_dst).parent
                 sandbox_dst_parent.mkdir(parents=True, exist_ok=True)
 
             # Sandbox dirs are read-write, extra binds are read-only
             flag = "--bind-try" if sdir in sandbox_dirs else "--ro-bind-try"
-            cmd.extend([flag, str(sdir), str(sdir)])
+            cmd.extend([flag, str(src_obj), str(dst_obj)])
 
         # Execute the respective agent
         cmd.append("--")
@@ -683,12 +767,180 @@ class AgentCLI(OdevFrameworkMixin):
             logger.error(f"Failed to run {self.cli}: {e}")
             return False
         finally:
+            # Kill ephemeral postgres if running
+            if pg_process:
+                try:
+                    pg_process.terminate()
+                    pg_process.wait(timeout=5)
+                except Exception:
+                    try:
+                        pg_process.kill()
+                    except Exception:
+                        pass
+
             # Cleanup playground, sandbox_tmp and proxy_dir
-            for path_to_clean in [playground, sandbox_tmp, proxy_dir]:
+            for path_to_clean in [playground, sandbox_tmp, proxy_dir, pg_data_dir]:
                 try:
                     shutil.rmtree(path_to_clean)
                 except Exception:
                     pass
+
+    def _clone_host_database(self, database: str, host_socket_dir: Path, ephemeral_socket_dir: Path):
+        """Clone a host database into the ephemeral cluster."""
+        logger.info(f"Cloning host database {database!r} into ephemeral cluster...")
+        user = Path.home().name
+        try:
+            # 1. Create the database in the ephemeral cluster
+            subprocess.run(
+                [
+                    "psql",
+                    "-h",
+                    str(ephemeral_socket_dir),
+                    "-p",
+                    "5432",
+                    "-U",
+                    user,
+                    "-d",
+                    "postgres",
+                    "-c",
+                    f'CREATE DATABASE "{database}";',
+                ],
+                check=True,
+                capture_output=True,
+            )
+
+            # 2. Pipe pg_dump from host to psql in ephemeral
+            # We use --no-owner --no-privileges to avoid errors in the restricted ephemeral cluster
+            dump_cmd = [
+                "pg_dump",
+                "-h",
+                str(host_socket_dir),
+                "-d",
+                database,
+                "--no-owner",
+                "--no-privileges",
+            ]
+            restore_cmd = [
+                "psql",
+                "-h",
+                str(ephemeral_socket_dir),
+                "-p",
+                "5432",
+                "-U",
+                user,
+                "-d",
+                database,
+            ]
+
+            p1 = subprocess.Popen(dump_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            p2 = subprocess.Popen(restore_cmd, stdin=p1.stdout, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+            p1.stdout.close()
+            _, stderr = p2.communicate()
+
+            if p2.returncode != 0:
+                logger.error(f"Failed to restore database clone: {stderr.decode()}")
+            else:
+                logger.info(f"Database {database!r} successfully cloned.")
+
+        except Exception as e:
+            logger.error(f"Failed to clone host database: {e}")
+
+    def _start_ephemeral_postgres(self, socket_dir: Path, data_dir: Path) -> subprocess.Popen | None:
+        """Initialize and start an ephemeral PostgreSQL cluster."""
+        import time
+
+        try:
+            logger.info(f"Initializing ephemeral PostgreSQL cluster in {data_dir}")
+            # Use current host user as superuser so psql works without -U
+            user = Path.home().name
+            subprocess.run(
+                ["initdb", "-D", str(data_dir), "--nosync", "-U", user, "--auth=trust"],
+                check=True,
+                capture_output=True,
+            )
+
+            # Start postgres listening ONLY on unix socket in socket_dir
+            # We use port 5432 so client tools work by default
+            process = subprocess.Popen(
+                [
+                    "postgres",
+                    "-D",
+                    str(data_dir),
+                    "-k",
+                    str(socket_dir),
+                    "-h",
+                    "",
+                    "-p",
+                    "5432",
+                    "-c",
+                    "fsync=off",
+                    "-c",
+                    "full_page_writes=off",
+                ],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+
+            # Wait for socket to be ready
+            socket_path = socket_dir / ".s.PGSQL.5432"
+            retries = 20
+            while not socket_path.exists() and retries > 0:
+                time.sleep(0.2)
+                retries -= 1
+                if process.poll() is not None:
+                    logger.error("Ephemeral PostgreSQL failed to start")
+                    return None
+
+            if not socket_path.exists():
+                logger.error("Timed out waiting for ephemeral PostgreSQL socket")
+                process.terminate()
+                return None
+
+            # Create default database matching the user name so psql works without arguments
+            try:
+                subprocess.run(
+                    [
+                        "psql",
+                        "-h",
+                        str(socket_dir),
+                        "-p",
+                        "5432",
+                        "-U",
+                        user,
+                        "-d",
+                        "postgres",
+                        "-c",
+                        f'CREATE DATABASE "{user}";',
+                    ],
+                    check=True,
+                    capture_output=True,
+                )
+                # Also create the 'odev' database requested by the user
+                subprocess.run(
+                    [
+                        "psql",
+                        "-h",
+                        str(socket_dir),
+                        "-p",
+                        "5432",
+                        "-U",
+                        user,
+                        "-d",
+                        "postgres",
+                        "-c",
+                        'CREATE DATABASE "odev";',
+                    ],
+                    check=True,
+                    capture_output=True,
+                )
+            except Exception as e:
+                logger.debug(f"Failed to create default user database: {e}")
+
+            logger.info("Ephemeral PostgreSQL cluster is ready")
+            return process
+        except Exception as e:
+            logger.error(f"Failed to start ephemeral PostgreSQL: {e}")
+            return None
 
     def get_latest_session_id(self) -> str | None:
         """Attempt to find the latest session ID for the current CLI."""
