@@ -61,9 +61,10 @@ class AICommand(DatabaseCommand, AICommandMixin):
 
         agent = self.get_ai_agent()
 
-        logger.info(f"Launching AI agent '{agent.cli}' with sandbox directories: {', '.join(sandbox_dirs)}")
-        if database_name:
-            logger.info(f"Using database '{database_name}' for environment detection")
+        if not self.args.headless:
+            logger.info(f"Launching AI agent '{agent.cli}' with sandbox directories: {', '.join(sandbox_dirs)}")
+            if database_name:
+                logger.info(f"Using database '{database_name}' for environment detection")
 
         agent.run(
             prompt_text,

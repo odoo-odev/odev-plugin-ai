@@ -58,6 +58,12 @@ class AICommandMixin:
         default=False,
     )
 
+    headless = args.Flag(
+        aliases=["-H", "--headless"],
+        description="Run the AI agent in non-interactive (headless) mode.",
+        default=False,
+    )
+
     resume = args.String(
         aliases=["--resume"],
         description="Resume a previous AI session by ID or 'latest'.",
@@ -150,6 +156,7 @@ class AICommandMixin:
             cli=final_cli,
             model=final_model,
             yolo=self.args.yolo,
+            headless=self.args.headless,
         )
 
     def run_ai_agent(self, prompt: str, database: str | None = None) -> bool:
