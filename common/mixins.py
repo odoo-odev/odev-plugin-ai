@@ -22,16 +22,16 @@ logger = logging.getLogger(__name__)
 
 
 class AICommandMixin:
+    """Mixin for commands that use AI agents.
+
+    Provides common arguments: cli, model, llm, yolo.
+    """
+
     if TYPE_CHECKING:
         odev: "Odev"
         args: "Namespace"
         config: "Config"
         console: "Console"
-
-    """Mixin for commands that use AI agents.
-
-    Provides common arguments: cli, model, llm, yolo.
-    """
 
     cli = args.String(
         aliases=["--cli"],
@@ -58,46 +58,97 @@ class AICommandMixin:
         default=False,
     )
 
+    resume = args.String(
+        aliases=["--resume"],
+        description="Resume a previous AI session by ID or 'latest'.",
+        default=None,
+    )
+
     def get_ai_agent(self) -> AgentCLI:
         """Initialize and return an AgentCLI instance based on command arguments.
 
-        Handles favorite CLI selection if no CLI is specified.
+        Handles favorite CLI selection and CLI-specific model favorites.
         """
         all_clis = ["claude", "gemini", "copilot", "opencode-cli"]
-        favorite = self.config.ai.favorite_cli
         chosen_cli = self.args.cli
+        favorite_cli = self.config.ai.favorite_cli
 
-        if not favorite:
+        # 1. Determine the CLI first
+        if not favorite_cli:
             available = [c for c in all_clis if shutil.which(c)]
             if not available:
                 logger.warning("No AI CLI tools found in PATH.")
-                favorite = "claude"
+                favorite_cli = "claude"
             elif len(available) == 1:
-                favorite = available[0]
-                self.config.ai.favorite_cli = favorite
-                logger.info(f"Setting your only detected AI CLI '{favorite}' as favorite.")
+                favorite_cli = available[0]
+                self.config.ai.favorite_cli = favorite_cli
+                logger.info(f"Setting your only detected AI CLI '{favorite_cli}' as favorite.")
             else:
-                favorite = self.console.select(
+                favorite_cli = self.console.select(
                     "Which AI CLI tool do you want to use as your favorite?",
                     choices=[(c, c) for c in available],
                 )
-                self.config.ai.favorite_cli = favorite
-                logger.info(f"Setting '{favorite}' as your favorite AI CLI.")
+                self.config.ai.favorite_cli = favorite_cli
+                logger.info(f"Setting '{favorite_cli}' as your favorite AI CLI.")
 
-        if chosen_cli and favorite and chosen_cli != favorite:
+        if chosen_cli and favorite_cli and chosen_cli != favorite_cli:
             if self.console.confirm(
                 f"Do you want to set '{chosen_cli}' as your new favorite AI CLI?",
                 default=False,
             ):
                 self.config.ai.favorite_cli = chosen_cli
-                favorite = chosen_cli
+                favorite_cli = chosen_cli
 
-        final_cli = chosen_cli or favorite or "claude"
-        model = self.args.llm or self.args.model
+        final_cli = chosen_cli or favorite_cli or "claude"
+
+        # 2. Determine the Model (specific to the CLI)
+        chosen_model = self.args.llm or self.args.model
+        favorite_model = self.config.ai.get_favorite_model(final_cli)
+
+        if not chosen_model and not favorite_model:
+            model_choices = {
+                "claude": [
+                    ("auto", "auto"),
+                    ("claude-3-5-sonnet-latest", "claude-3-5-sonnet-latest"),
+                ],
+                "gemini": [
+                    ("auto", "auto"),
+                    ("gemini-1.5-pro", "gemini-1.5-pro"),
+                    ("gemini-2.0-flash", "gemini-2.0-flash"),
+                    ("gemini-3-flash-preview", "gemini-3-flash-preview"),
+                ],
+                "copilot": [
+                    ("auto", "auto"),
+                    ("gpt-4o", "gpt-4o"),
+                    ("claude-3.5-sonnet", "claude-3.5-sonnet"),
+                ],
+            }
+            choices = model_choices.get(final_cli, [("auto", "auto")])
+            choices.append(("other", "Other (type it manually)"))
+
+            favorite_model = self.console.select(
+                f"Which model do you want to use for '{final_cli}' as your favorite?",
+                choices=choices,
+            )
+            if favorite_model == "other":
+                favorite_model = self.console.input("Please enter the model name:")
+
+            self.config.ai.set_favorite_model(final_cli, favorite_model)
+            logger.info(f"Setting '{favorite_model}' as your favorite model for {final_cli}.")
+
+        if chosen_model and favorite_model and chosen_model != favorite_model:
+            if self.console.confirm(
+                f"Do you want to set '{chosen_model}' as your new favorite model for {final_cli}?",
+                default=False,
+            ):
+                self.config.ai.set_favorite_model(final_cli, chosen_model)
+                favorite_model = chosen_model
+
+        final_model = chosen_model or favorite_model or "auto"
 
         return AgentCLI(
             cli=final_cli,
-            model=model,
+            model=final_model,
             yolo=self.args.yolo,
         )
 
@@ -113,4 +164,9 @@ class AICommandMixin:
         # Ensure the current directory (where the log file might be) is also included
         paths.add(Path.cwd().as_posix())
 
-        return agent.run(prompt, sandbox_dirs=list(paths), database=database)
+        return agent.run(
+            prompt,
+            sandbox_dirs=list(paths),
+            database=database,
+            resume=self.args.resume,
+        )

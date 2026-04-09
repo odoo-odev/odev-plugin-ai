@@ -65,4 +65,9 @@ class AICommand(DatabaseCommand, AICommandMixin):
         if database_name:
             logger.info(f"Using database '{database_name}' for environment detection")
 
-        agent.run(prompt_text, sandbox_dirs, database=database_name)
+        agent.run(
+            prompt_text,
+            sandbox_dirs,
+            database=database_name,
+            resume=self.args.resume,
+        )
