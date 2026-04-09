@@ -19,7 +19,8 @@ your host system:
     ```bash
     pip install ruff
     ```
--   **RTK (Rust Token Killer)**: Highly recommended for token optimization (saves 60-90% on command outputs).
+-   **RTK (Rust Token Killer)**: Highly recommended for token optimization (saves 60-90% on command outputs). `odev`
+    automatically binds your host's `rtk` binary and its cache (`~/.cache/rtk`) into the AI sandbox.
     ```bash
     curl -fsSL https://raw.githubusercontent.com/rtk-ai/rtk/refs/heads/master/install.sh | sh
     rtk init --global
@@ -29,9 +30,3 @@ your host system:
 
 Configuration is handled automatically when you first install `odev` or enable the AI plugin. You will be prompted to
 select your preferred LLM provider and enter the corresponding API key.
-
-## RTK (Rust Token Killer) Integration
-
-`odev` automatically binds your host's `rtk` binary and its cache (`~/.cache/rtk`) into the AI sandbox. If an AI agent
-(like Claude Code) is configured to use RTK, it will transparently compress terminal outputs, significantly reducing
-your token consumption.

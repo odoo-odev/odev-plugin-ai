@@ -54,21 +54,9 @@ class AICommand(DatabaseCommand, AICommandMixin):
             prompt_parts.insert(0, database_name)
             database_name = None
 
-        prompt_text = " ".join(prompt_parts)
-
-        # Ensure dirs are absolute paths and strings
-        sandbox_dirs = [str(Path(d).resolve()) for d in self.args.dirs]
-
-        agent = self.get_ai_agent()
-
-        if not self.args.headless:
-            logger.info(f"Launching AI agent '{agent.cli}' with sandbox directories: {', '.join(sandbox_dirs)}")
-            if database_name:
-                logger.info(f"Using database '{database_name}' for environment detection")
-
-        agent.run(
-            prompt_text,
-            sandbox_dirs,
+        self.get_ai_agent().run(
+            prompt=" ".join(prompt_parts),
+            sandbox_dirs=[str(Path(d).resolve()) for d in self.args.dirs],
             database=database_name,
             resume=self.args.resume,
         )

@@ -4,13 +4,8 @@ from odev.common import args, bash
 from odev.common.databases import DummyDatabase
 from odev.common.logging import logging
 
-
-try:
-    from odev.plugins.odev_plugin_project.commands.pre_commit import PreCommit as BasePreCommit
-except ImportError:
-    from odev.common.commands import DatabaseOrRepositoryCommand as BasePreCommit
-
 from odev.plugins.odev_plugin_ai.common.mixins import AICommandMixin
+from odev.plugins.odev_plugin_project.commands.pre_commit import PreCommit as BasePreCommit
 
 
 logger = logging.getLogger(__name__)
@@ -46,42 +41,26 @@ class PreCommit(BasePreCommit, AICommandMixin):
             return
 
         # Run pre-commit checks to find issues
-        import tempfile
+        result = self._run_checks()
 
-        repo_path = Path(self._repository.path)
+        if result and result.returncode == 0:
+            logger.info("Pre-commit passed!")
+            return
 
-        # We create a temporary file INSIDE the repo to ensure the sandbox can read it
-        with tempfile.NamedTemporaryFile(mode="w+", dir=repo_path, suffix=".txt", delete=False) as tmp:
-            tmp_path = Path(tmp.name)
-            try:
-                result = self._run_checks()
+        # Pre-commit failed
+        logger.info("Launching AI agent to fix pre-commit issues...")
 
-                if result and result.returncode == 0:
-                    logger.info("Pre-commit passed!")
-                    return
-
-                # Pre-commit failed
-                tmp.write(result.stdout.decode() if result else "No output captured.")
-                tmp.flush()
-
-                logger.info("Launching AI agent to fix pre-commit issues...")
-
-                prompt = f"""
+        prompt = """
 I ran `pre-commit run --all-files` and it failed.
-The full output has been saved to `{tmp_path.name}`.
 
 Please:
-1. Read that file to understand the failures.
+1. Run `pre-commit run --all-files` to see the failures.
 2. Analyze and fix the reported issues.
 3. Run `pre-commit run --all-files` again to verify your fixes.
-4. Once everything passes, commit the fixes with a meaningful message (e.g. "[FIX] module: description") and THEN delete the `{tmp_path.name}` file.
+4. Once everything passes, commit the fixes with a meaningful message (e.g. "[FIX] module: description").
 5. Provide a summary of your changes.
 """
-                self.run_ai_agent(prompt, database=self.database_name)
-            finally:
-                # Ensure the file is deleted on the host even if the agent fails
-                if tmp_path.exists():
-                    tmp_path.unlink()
+        self.run_ai_agent(prompt, database=self.database_name)
 
     def _run_checks(self) -> bash.CompletedProcess | None:
         """Run pre-commit checks on all files and display output in real-time."""

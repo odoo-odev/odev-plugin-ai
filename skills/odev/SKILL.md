@@ -1,3 +1,10 @@
+---
+name: odev
+description:
+    "Mandatory CLI usage rules for Odoo development, covering database creation, versioning, argument ordering, and
+    server orchestration with odev."
+---
+
 # ODEV Commands Skill
 
 This skill provides instructions on how to use `odev` (Odoo Development CLI) during upgrade tasks.

@@ -1,7 +1,5 @@
 from pathlib import Path
 
-import requests
-
 from odev.commands.database.test import TestCommand as BaseTestCommand
 from odev.common import args
 from odev.common.errors import CommandError
@@ -28,19 +26,6 @@ class TestCommand(BaseTestCommand, AICommandMixin):
         if not self.args.ai:
             return super().run()
 
-        # Fetch auto-tags from Runbot
-        auto_tags = []
-        try:
-            logger.info("Fetching auto-tags from Runbot...")
-            response = requests.get("https://runbot.odoo.com/runbot/auto-tags", timeout=10)
-            auto_tags = [t.strip() for t in response.text.split(",") if t.strip()]
-
-            for tag in auto_tags:
-                if tag not in self.test_tags:
-                    self.test_tags.append(tag)
-        except Exception as error:
-            logger.warning(f"Could not fetch auto-tags: {error}")
-
         logger.info("Running tests locally before launching AI agent...")
         try:
             super().run()
@@ -56,8 +41,8 @@ class TestCommand(BaseTestCommand, AICommandMixin):
         # Reconstruct the command string for the AI agent
         args_to_pass = [a for a in self._argv if a not in ("--ai",)]
 
-        if auto_tags:
-            args_to_pass.extend(["--test-tags", ",".join(auto_tags)])
+        if self.auto_tags:
+            args_to_pass.extend(["--test-tags", ",".join(self.auto_tags)])
 
         cmd_to_run = f"odev test {' '.join(args_to_pass)}"
 

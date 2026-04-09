@@ -22,19 +22,16 @@ class PostgresSandbox(OdevFrameworkMixin):
         database: str | None,
         proxy_dir: Path,
         pg_data_dir: Path,
-        pg_socket_dir: Path | str | None,
         ephemeral: bool = True,
     ) -> subprocess.Popen | None:
         """Initialize PostgreSQL cluster or proxy for the sandbox."""
-        if pg_socket_dir:
-            host_socket_dir = Path(pg_socket_dir)
+        # Discover host socket directory
+        for path in [Path("/var/run/postgresql"), Path("/tmp")]:
+            if any(path.glob(".s.PGSQL.*")):
+                host_socket_dir = path
+                break
         else:
-            for path in [Path("/var/run/postgresql"), Path("/tmp")]:
-                if any(path.glob(".s.PGSQL.*")):
-                    host_socket_dir = path
-                    break
-            else:
-                host_socket_dir = Path("/var/run/postgresql")
+            host_socket_dir = Path("/var/run/postgresql")
 
         # 1. Ephemeral Cluster Setup
         if ephemeral:
@@ -42,26 +39,7 @@ class PostgresSandbox(OdevFrameworkMixin):
             if pg_process:
                 user = Path.home().name
                 if database:
-                    try:
-                        subprocess.run(
-                            [
-                                "psql",
-                                "-h",
-                                str(proxy_dir),
-                                "-p",
-                                "5432",
-                                "-U",
-                                user,
-                                "-d",
-                                "postgres",
-                                "-c",
-                                f'CREATE DATABASE "{database}";',
-                            ],
-                            check=True,
-                            capture_output=True,
-                        )
-                    except Exception as e:
-                        logger.debug(f"Database {database!r} setup failed/skipped: {e}")
+                    self._create_database(proxy_dir, user, database)
 
                 if database and host_socket_dir and host_socket_dir.exists():
                     self._clone_host_database(database, host_socket_dir, proxy_dir)
@@ -82,13 +60,7 @@ class PostgresSandbox(OdevFrameworkMixin):
 
     def _clone_host_database(self, database: str, host_socket_dir: Path, ephemeral_socket_dir: Path) -> bool:
         """Clone host database data into the ephemeral cluster's existing database."""
-        # Only log if the database name doesn't suggest a fresh upgrade DB to avoid confusion
-        is_upgrade_db = database.endswith("_upgrade")
-        if not is_upgrade_db:
-            logger.info(f"Cloning host database data for {database!r} into ephemeral cluster...")
-        else:
-            logger.debug(f"Syncing fresh upgrade database {database!r} to sandbox")
-
+        logger.info(f"Cloning host database data for {database!r} into ephemeral cluster...")
         user = Path.home().name
         try:
             # 1. Pipe pg_dump from host to psql in ephemeral
@@ -125,18 +97,39 @@ class PostgresSandbox(OdevFrameworkMixin):
             _, stderr = p2.communicate()
 
             if p2.returncode != 0:
-                if not is_upgrade_db:
-                    logger.warning(
-                        f"Failed to clone data for {database!r} (it might not exist on host): {stderr.decode()}"
-                    )
+                logger.warning(f"Failed to clone data for {database!r} (it might not exist on host): {stderr.decode()}")
                 return False
             else:
-                if not is_upgrade_db:
-                    logger.info(f"Database {database!r} data successfully cloned.")
+                logger.info(f"Database {database!r} data successfully cloned.")
                 return True
 
         except Exception as e:
             logger.debug(f"Failed to clone host database data: {e}")
+            return False
+
+    def _create_database(self, socket_dir: Path, user: str, database: str) -> bool:
+        """Create a database in the ephemeral cluster."""
+        try:
+            subprocess.run(
+                [
+                    "psql",
+                    "-h",
+                    str(socket_dir),
+                    "-p",
+                    "5432",
+                    "-U",
+                    user,
+                    "-d",
+                    "postgres",
+                    "-c",
+                    f'CREATE DATABASE "{database}";',
+                ],
+                check=True,
+                capture_output=True,
+            )
+            return True
+        except Exception as e:
+            logger.debug(f"Database {database!r} creation failed/skipped: {e}")
             return False
 
     def _start_ephemeral_postgres(self, socket_dir: Path, data_dir: Path) -> subprocess.Popen | None:
@@ -189,45 +182,8 @@ class PostgresSandbox(OdevFrameworkMixin):
                 process.terminate()
                 return None
 
-            # Create default database matching the user name so psql works without arguments
-            try:
-                subprocess.run(
-                    [
-                        "psql",
-                        "-h",
-                        str(socket_dir),
-                        "-p",
-                        "5432",
-                        "-U",
-                        user,
-                        "-d",
-                        "postgres",
-                        "-c",
-                        f'CREATE DATABASE "{user}";',
-                    ],
-                    check=True,
-                    capture_output=True,
-                )
-                # Also create the 'odev' database requested by the user
-                subprocess.run(
-                    [
-                        "psql",
-                        "-h",
-                        str(socket_dir),
-                        "-p",
-                        "5432",
-                        "-U",
-                        user,
-                        "-d",
-                        "postgres",
-                        "-c",
-                        'CREATE DATABASE "odev";',
-                    ],
-                    check=True,
-                    capture_output=True,
-                )
-            except Exception as e:
-                logger.debug(f"Failed to create default user database: {e}")
+            self._create_database(socket_dir, user, user)
+            self._create_database(socket_dir, user, "odev")
 
             if not self.headless:
                 logger.info("Ephemeral PostgreSQL cluster is ready")

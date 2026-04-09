@@ -36,14 +36,19 @@ class BwrapSandbox(OdevFrameworkMixin):
     def _map_path(self, p: Path | str, path_mapping: dict[str, str] | None) -> Path:
         """Apply path mapping to a path if it matches any host prefix."""
         p = Path(p).resolve()
-        dst = p
+        p_str = str(p)
         if path_mapping:
-            p_str = str(p)
+            # Sort by length descending to match longest prefix first
             for host, guest in sorted(path_mapping.items(), key=lambda x: len(x[0]), reverse=True):
-                if p_str.startswith(host):
-                    dst = Path(p_str.replace(host, guest))
-                    break
-        return dst
+                host_p = Path(host).resolve()
+                host_str = str(host_p)
+                if p_str == host_str:
+                    return Path(guest)
+                if p_str.startswith(host_str + os.sep):
+                    # Only permit guest-path translations (starting with /)
+                    if guest.startswith("/"):
+                        return Path(p_str.replace(host_str, guest, 1))
+        return p
 
     def _add_bind(
         self,
@@ -68,11 +73,6 @@ class BwrapSandbox(OdevFrameworkMixin):
             new_ro = ro and e_ro
             new_primary = is_primary or e_primary
 
-            # Only log if something actually changes
-            if (new_ro != e_ro) or (new_primary != e_primary) or (src != e_src):
-                mode = "RW" if not new_ro else "RO"
-                logger.debug(f"Updating binding {dst} (Mode: {mode}, Primary: {new_primary})")
-
             bind_pool[dst] = (src, new_ro, new_primary)
         else:
             bind_pool[dst] = (src, ro, is_primary)
@@ -82,10 +82,11 @@ class BwrapSandbox(OdevFrameworkMixin):
         sandbox_dirs: list[str],
         agent_dirs: list[Path],
         agent_files: list[Path],
-        dynamic_binds: list[tuple[Path, Path, bool]],
+        dynamic_binds: list[tuple[Path, Path, bool, bool]],
         extra_bind_dirs: list[str] | None = None,
         database: str | None = None,
         db_user: str | None = None,
+        ephemeral_pg: bool = True,
     ) -> bool:
         """Display a warning message about the sandbox access and security risks."""
         if self.headless:
@@ -120,26 +121,55 @@ class BwrapSandbox(OdevFrameworkMixin):
         else:
             console.print(" • [color.green]Isolating (Empty ephemeral cluster, no database copied)[/color.green]")
 
+        if database and not ephemeral_pg:
+            console.print(
+                "\n[bold color.red]WARNING:[/bold color.red] You are granting access to your [bold]HOST[/bold] PostgreSQL cluster."
+            )
+            console.print("The agent will be able to see and potentially access [bold]ALL[/bold] your local databases.")
+
         console.print("\n[bold color.cyan]INFRASTRUCTURE & REFERENCE (System/Source/Config):[/bold color.cyan]")
-        # Group similar binds
-        important_binds = []
+
+        # We use a dict keyed by (SRC, DST) to strictly deduplicate lines in the display
+        # and ensure a mount point is only listed once with its best permission.
+        display_map: dict[tuple[str, str], str] = {}
+
+        def _add_to_display(src: str, dst: str, mode: str):
+            key = (src, dst)
+            if key in display_map:
+                if "RW" in mode and "RO" in display_map[key]:
+                    display_map[key] = (
+                        f"{src} [bold color.green]-> {dst}[/bold color.green] ({mode})"
+                        if src != dst
+                        else f"{src} ({mode})"
+                    )
+                return
+            display_map[key] = (
+                f"{src} [bold color.green]-> {dst}[/bold color.green] ({mode})" if src != dst else f"{src} ({mode})"
+            )
+
         for adir in agent_dirs:
-            important_binds.append(f"{adir} (RW)")
+            _add_to_display(str(adir), str(adir), "RW")
         for f in agent_files:
             if f.exists():
-                important_binds.append(f"{f} (RW)")
+                _add_to_display(str(f), str(f), "RW")
 
         dynamic_binds_typed: list[tuple[Path, Path, bool, bool]] = dynamic_binds  # type: ignore
         for src_path, dst_path, ro_bool, primary_bool in dynamic_binds_typed:
-            mode = "RW" if not ro_bool else "RO"
-            if str(src_path) == str(dst_path):
-                important_binds.append(f"{src_path} ({mode})")
-            else:
-                important_binds.append(f"{src_path} [bold color.green]-> {dst_path}[/bold color.green] ({mode})")
+            if primary_bool:
+                continue
+            _add_to_display(str(src_path), str(dst_path), "RO" if ro_bool else "RW")
 
-        # Deduplicate and sort
-        for bind in sorted(set(important_binds)):
-            console.print(f" • {bind}")
+        if extra_bind_dirs:
+            for edir in extra_bind_dirs:
+                if ":" in edir:
+                    src, dst = edir.split(":", 1)
+                    _add_to_display(src, dst, "RO")
+                else:
+                    _add_to_display(edir, edir, "RO")
+
+        # Deduplicate and sort the final display lines
+        for line in sorted(display_map.values()):
+            console.print(f" • {line}")
 
         if not self.yolo and not console.bypass_prompt:
             return console.confirm("Do you want to proceed with this AI agent execution?", default=True)
@@ -268,85 +298,70 @@ class BwrapSandbox(OdevFrameworkMixin):
         from odev.common.databases.local import LocalDatabase
 
         # 1. Collect all candidates
-        # We use maps to track the best intent for each destination: dst -> (src, ro, is_primary)
+        # Key: GUEST PATH -> Value: (HOST PATH, RO, IS_PRIMARY)
         candidates: dict[Path, tuple[Path, bool, bool]] = {}
 
         def _add_candidate(src, dst=None, ro=True, is_primary=False):
             src_p = Path(src).resolve()
             if not src_p.exists():
                 return
-            dst_p = Path(dst) if dst else src_p
+            dst_p = Path(dst).resolve() if dst else src_p
+
+            # Prioritization Logic:
+            # 1. RW (ro=False) > RO (ro=True)
+            # 2. Primary > Non-Primary
             if dst_p in candidates:
                 e_src, e_ro, e_primary = candidates[dst_p]
-                # Prioritize: RW > RO, Primary > Non-Primary
-                ro = ro and e_ro
-                is_primary = is_primary or e_primary
+                if not e_ro and ro:  # Don't downgrade RW to RO
+                    return
+                if e_primary and not is_primary:  # Don't downgrade Primary to Non-Primary
+                    return
+
             candidates[dst_p] = (src_p, ro, is_primary)
 
-        # A. Explicit Binds (User/Command)
+        # A. Explicit Binds (User/Command) - Highest Priority
         for i, sdir in enumerate(sandbox_dirs):
             if ":" in sdir:
                 src, dst = sdir.split(":", 1)
             else:
                 src = sdir
-                dst = sdir
-                # Automatically map the primary working directory to /custom if not explicitly mapped
-                if i == 0:
-                    dst = "/custom"
-                    path_mapping[str(Path(src).resolve())] = dst
+                dst = "/custom" if i == 0 else sdir
             _add_candidate(src, dst, ro=False, is_primary=True)
-            if dst == "/custom":
-                _add_candidate(src, src, ro=False, is_primary=True)
 
         for edir in extra_bind_dirs or []:
             src, dst = edir.split(":", 1) if ":" in edir else (edir, edir)
             _add_candidate(src, dst, ro=True, is_primary=False)
 
-        # B. Common Odev Containers (Base for hierarchy checks)
-        ro_containers = {
-            self.odev.home_path / "worktrees",
-            self.odev.home_path / "plugins",
-        }
-        rw_containers = {self.odev.home_path / "virtualenvs"}
+        # B. Setup Containers
+        ro_containers = set()
+        ro_containers.add(self.odev.home_path / "worktrees")
+        ro_containers.add(self.odev.home_path / "plugins")
+
+        rw_containers = set()
+        rw_containers.add(self.odev.home_path / "virtualenvs")
+
         repo_containers = {Path(r.path).resolve() for r in odoo_repositories(enterprise=True)}
 
-        def _is_covered(p: Path) -> bool:
-            p = p.resolve()
-            for container in ro_containers | rw_containers | repo_containers:
-                c_p = container.resolve()
-                if p == c_p:
-                    return True
-                try:
-                    p.relative_to(c_p)
-                    return True
-                except ValueError:
-                    continue
-            return False
-
-        # C. Plugin Containers & Skills Mapping
+        # C. Automatic Discovery
         for plugin in self.odev.plugins:
             try:
                 res = plugin.path.resolve()
                 if res.exists():
-                    ro_containers.add(res.parent)
-                # Automatically mount all skill subdirectories to /skills/*
+                    # Only mount the plugin itself, NOT its parent (which could be sensitive like odoo-ps)
+                    _add_candidate(res, self._map_path(res, path_mapping), ro=True)
+                # Skills Mapping
                 sp = res / "skills"
                 if sp.exists() and sp.is_dir():
                     for skill_pkg in sp.iterdir():
                         if skill_pkg.is_dir():
-                            dest = f"/skills/{skill_pkg.name}"
-                            if Path(dest) not in candidates:
-                                _add_candidate(skill_pkg, dest, ro=True)
-                                path_mapping[str(skill_pkg)] = dest
+                            _add_candidate(skill_pkg, f"/skills/{skill_pkg.name}", ro=True)
             except Exception:
                 pass
 
-        # D. Dynamic Discovery
         try:
             up = self.odev.config.paths.upgrade.resolve()
-            if up.exists() and Path("/upgrade") not in candidates:
+            if up.exists():
                 _add_candidate(up, "/upgrade", ro=True)
-                path_mapping[str(up)] = "/upgrade"
         except Exception:
             pass
 
@@ -354,27 +369,56 @@ class BwrapSandbox(OdevFrameworkMixin):
         _add_candidate(odev_path, odev_path, ro=True)
 
         active_venv_path: Path | None = None
+        # Venv/Version discovery
+        if database:
+            db = LocalDatabase(database)
+            if db.exists:
+                v_path = Path(db.venv.path).resolve()
+                if v_path.exists():
+                    active_venv_path = self._map_path(v_path, path_mapping)
+                    _add_candidate(v_path, active_venv_path, ro=True)
+                for wt in db.worktrees:
+                    wp = Path(wt.path).resolve()
+                    if wp.exists():
+                        _add_candidate(wp, self._map_path(wp, path_mapping), ro=True)
+                if not version:
+                    version = str(db.version)
+
+        if version:
+            ver_str = str(OdooVersion(version))
+            v_p = Path(PythonEnv(ver_str).path).resolve()
+            if v_p.exists():
+                active_venv_path = self._map_path(v_p, path_mapping)
+                _add_candidate(v_p, active_venv_path, ro=True)
+            for repo in odoo_repositories(enterprise=True):
+                for wt in repo.worktrees():
+                    if wt.name == ver_str:
+                        wp = Path(wt.path).resolve()
+                        if wp.exists():
+                            _add_candidate(wp, self._map_path(wp, path_mapping), ro=True)
 
         rtk = shutil.which("rtk")
         if rtk:
             rp = Path(rtk).resolve()
             _add_candidate(rp, self._map_path(rp, path_mapping), ro=True)
 
-        # E. Add the Infrastructure Containers
-        for p in ro_containers:
-            _add_candidate(p, self._map_path(p, path_mapping), ro=True)
+        # E. Add base containers (only if guest path not already claimed)
+        # RW takes precedence for the same directory
         for p in rw_containers:
             _add_candidate(p, self._map_path(p, path_mapping), ro=False)
+        for p in ro_containers:
+            _add_candidate(p, self._map_path(p, path_mapping), ro=True)
         for p in repo_containers:
             _add_candidate(p, self._map_path(p, path_mapping), ro=True)
 
-        # 2. Binding Phase (Call _add_bind exactly once per path)
+        # 2. Consolidate Pool
         pool: dict[Path, tuple[Path, bool, bool]] = {}
-        for dst_key, (src_val, ro_val, primary_val) in candidates.items():
-            self._add_bind(pool, src_val, dst_key, ro=ro_val, is_primary=primary_val)
+        for dst_p, (src_p, ro_v, prim_v) in candidates.items():
+            self._add_bind(pool, src_p, dst_p, ro=ro_v, is_primary=prim_v)
 
         # 3. Final Nesting Deduction
         final_pool: list[tuple[Path, Path, bool, bool]] = []
+        # Sort by guest path depth so parents come first
         sorted_dsts = sorted(pool.keys(), key=lambda d: len(d.parts))
         for dst_path in sorted_dsts:
             src_path, ro_bool, primary_bool = pool[dst_path]
@@ -384,6 +428,7 @@ class BwrapSandbox(OdevFrameworkMixin):
                     rel_src = src_path.relative_to(e_src)
                     rel_dst = dst_path.relative_to(e_dst)
                     if rel_src == rel_dst:
+                        # Redundant if the parent mount has compatible permissions
                         if not e_ro or ro_bool:
                             is_redundant = True
                             break
@@ -609,17 +654,17 @@ class BwrapSandbox(OdevFrameworkMixin):
         sandbox_tmp: Path,
         proxy_dir: Path,
         pg_data_dir: Path,
-        timeout: int | None = None,
     ) -> bool:
         """Final execution logic for the bwrap sandbox."""
         if not self._display_sandbox_warning(
             sandbox_dirs=sandbox_dirs,
             agent_dirs=agent_dirs,
             agent_files=agent_files,
-            dynamic_binds=[(s, d, r) for s, d, r, p in final_binds],
+            dynamic_binds=final_binds,
             extra_bind_dirs=extra_bind_dirs,
             database=database,
             db_user=db_user,
+            ephemeral_pg=pg_process is not None,
         ):
             return False
 
@@ -655,12 +700,10 @@ class BwrapSandbox(OdevFrameworkMixin):
 
                 # Push content to scrollback to prevent loss if TUI clears screen
                 if not self.headless:
-                    from odev.common.console import console
-
                     console.print("\n" * 20)
 
                 # Use bash.run to grant the command raw TTY access, supporting TUIs natively.
-                bash.run(full_cmd, timeout=timeout)
+                bash.run(full_cmd)
         except subprocess.CalledProcessError as error:
             returncode = error.returncode
         except Exception as e:
