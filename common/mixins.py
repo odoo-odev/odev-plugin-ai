@@ -115,18 +115,15 @@ class AICommandMixin:
             model_choices = {
                 "claude": [
                     ("auto", "auto"),
-                    ("claude-3-5-sonnet-latest", "claude-3-5-sonnet-latest"),
+                    ("claude-haiku-4-5", "claude-haiku-4-5"),
                 ],
                 "gemini": [
                     ("auto", "auto"),
-                    ("gemini-1.5-pro", "gemini-1.5-pro"),
-                    ("gemini-2.0-flash", "gemini-2.0-flash"),
                     ("gemini-3-flash-preview", "gemini-3-flash-preview"),
                 ],
                 "copilot": [
                     ("auto", "auto"),
-                    ("gpt-4o", "gpt-4o"),
-                    ("claude-3.5-sonnet", "claude-3.5-sonnet"),
+                    ("gpt-5.4-mini", "gpt-5.4-mini"),
                 ],
             }
             choices = model_choices.get(final_cli, [("auto", "auto")])
@@ -159,7 +156,12 @@ class AICommandMixin:
             headless=self.args.headless,
         )
 
-    def run_ai_agent(self, prompt: str, database: str | None = None) -> bool:
+    def run_ai_agent(
+        self,
+        prompt: str,
+        database: str | None = None,
+        ephemeral_pg: bool = True,
+    ) -> bool:
         """Helper to run the AI agent with common Odoo-related sandbox paths."""
         agent = self.get_ai_agent()
 
@@ -176,4 +178,5 @@ class AICommandMixin:
             sandbox_dirs=list(paths),
             database=database,
             resume=self.args.resume,
+            ephemeral_pg=ephemeral_pg,
         )

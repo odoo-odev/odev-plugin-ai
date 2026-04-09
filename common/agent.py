@@ -71,6 +71,7 @@ class AgentCLI(OdevFrameworkMixin):
         extra_bind_dirs: list[str] | None = None,
         database: str | None = None,
         db_user: str | None = None,
+        cwd: str | None = None,
         ephemeral_pg: bool = True,
     ) -> bool:
         """Display a warning message about the sandbox access and security risks."""
@@ -121,12 +122,13 @@ class AgentCLI(OdevFrameworkMixin):
             if f.exists():
                 important_binds.append(f"{f} (RW)")
 
-        for src, dst, ro in dynamic_binds:
-            mode = "RO" if ro else "RW"
-            if str(src) == str(dst):
-                important_binds.append(f"{src} ({mode})")
+        dynamic_binds_typed: list[tuple[Path, Path, bool]] = dynamic_binds  # type: ignore
+        for src_path, dst_path, ro_bool in dynamic_binds_typed:
+            mode = "RO" if ro_bool else "RW"
+            if str(src_path) == str(dst_path):
+                important_binds.append(f"{src_path} ({mode})")
             else:
-                important_binds.append(f"{src} [bold color.green]-> {dst}[/bold color.green] ({mode})")
+                important_binds.append(f"{src_path} [bold color.green]-> {dst_path}[/bold color.green] ({mode})")
 
         if extra_bind_dirs:
             for edir in extra_bind_dirs:
@@ -501,22 +503,22 @@ class AgentCLI(OdevFrameworkMixin):
             pool.append((Path(src), Path(dst), True))
         pool.extend(dynamic_binds)
 
-        deduplicated_pool = []
+        deduplicated_pool: list[tuple[Path, Path, bool]] = []
         # Sort by guest path depth so parents come first
         sorted_pool = sorted(pool, key=lambda b: len(b[1].parts))
-        for src, dst, ro in sorted_pool:
+        for src_path, dst_path, ro_bool in sorted_pool:
             is_redundant = False
             for e_src, e_dst, e_ro in deduplicated_pool:
                 try:
-                    rel_src = src.relative_to(e_src)
-                    rel_dst = dst.relative_to(e_dst)
+                    rel_src = src_path.relative_to(e_src)
+                    rel_dst = dst_path.relative_to(e_dst)
                     if rel_src == rel_dst:
                         is_redundant = True
                         break
                 except (ValueError, AttributeError):
                     continue
             if not is_redundant:
-                deduplicated_pool.append((src, dst, ro))
+                deduplicated_pool.append((src_path, dst_path, ro_bool))
 
         # Re-partition into sandbox_dirs, extra_bind_dirs, and dynamic_binds for display compatibility
         # We use the deduplicated results to filter the originals
@@ -524,24 +526,24 @@ class AgentCLI(OdevFrameworkMixin):
         final_extra_bind_dirs = []
         final_dynamic_binds = []
 
-        for s, d, r in deduplicated_pool:
+        for src_final, dst_final, ro_final in deduplicated_pool:
             # Reconstruct strings for warning display
-            s_str = f"{s}:{d}"
+            s_str = f"{src_final}:{dst_final}"
             # Check if this mount was originally requested as a Primary Sandbox (RW)
-            original_sandbox = next((sd for sd in sandbox_dirs if sd.startswith(str(s))), None)
+            original_sandbox = next((sd for sd in sandbox_dirs if sd.startswith(str(src_final))), None)
 
-            if original_sandbox and not r:
+            if original_sandbox and not ro_final:
                 final_sandbox_dirs.append(original_sandbox)
-            elif r:
+            elif ro_final:
                 # If it's Read-Only, we put it in extra/infrastructure
                 final_extra_bind_dirs.append(s_str)
             else:
-                final_dynamic_binds.append((s, d, r))
+                final_dynamic_binds.append((src_final, dst_final, ro_final))
 
         # Update core variables to use deduplicated versions for the rest of the execution
         sandbox_dirs = final_sandbox_dirs
         extra_bind_dirs = final_extra_bind_dirs
-        dynamic_binds = final_dynamic_binds
+        dynamic_binds = final_dynamic_binds  # type: ignore[assignment]
 
         # 5. Prepare Odev Config
         self._prepare_odev_config(playground, path_mapping, host_home)
@@ -610,8 +612,8 @@ class AgentCLI(OdevFrameworkMixin):
 
         # 7. Collect all guest paths and ensure top-level directories exist in the guest root
         all_guest_paths: set[str] = set()
-        for _, dst, _ in dynamic_binds:
-            all_guest_paths.add(str(dst))
+        for _, dst_path, _ in dynamic_binds:
+            all_guest_paths.add(str(dst_path))
         for sdir in sandbox_dirs + (extra_bind_dirs or []):
             dst = sdir.split(":", 1)[1] if ":" in sdir else sdir
             all_guest_paths.add(dst)
@@ -972,17 +974,17 @@ class AgentCLI(OdevFrameworkMixin):
                 pass
 
         # 5. Smart Aliasing (internal mappings for agent compatibility)
-        aliased = False
+        aliased_name: str | None = None
         if "GOOGLE_API_KEY" in found_secrets and "GEMINI_API_KEY" not in found_secrets:
             found_secrets["GEMINI_API_KEY"] = found_secrets["GOOGLE_API_KEY"]
-            aliased = "GEMINI_API_KEY"
+            aliased_name = "GEMINI_API_KEY"
         if "GEMINI_API_KEY" in found_secrets and "GOOGLE_API_KEY" not in found_secrets:
             found_secrets["GOOGLE_API_KEY"] = found_secrets["GEMINI_API_KEY"]
-            aliased = "GOOGLE_API_KEY"
+            aliased_name = "GOOGLE_API_KEY"
 
-        if aliased and not self.headless:
+        if aliased_name and not self.headless:
             logger.info(
-                f"Using {found_secrets.get('GOOGLE_API_KEY' if aliased == 'GEMINI_API_KEY' else 'GEMINI_API_KEY')[:10]}... (aliased to {aliased})"
+                f"Using {found_secrets.get('GOOGLE_API_KEY' if aliased_name == 'GEMINI_API_KEY' else 'GEMINI_API_KEY', '')[:10]}... (aliased to {aliased_name})"
             )
 
         if "GITHUB_TOKEN" in found_secrets and "GH_TOKEN" not in found_secrets:
@@ -1201,7 +1203,8 @@ class AgentCLI(OdevFrameworkMixin):
                 from odev.common.console import console
 
                 # Push content to scrollback to prevent loss if TUI clears screen
-                console.print("\n" * (console.height or 20))
+                if not self.headless:
+                    console.print("\n" * 20)
 
                 # Use bash.run to grant the command raw TTY access, supporting TUIs natively.
                 bash.run(full_cmd)
@@ -1429,7 +1432,7 @@ class AgentCLI(OdevFrameworkMixin):
             return None
 
     def get_latest_session_id(self) -> str | None:
-        """Attempt to find the latest session ID for the current CLI."""
+        """Return the ID of the most recent session for this agent CLI."""
         try:
             if self.cli == "gemini":
                 # Use execute instead of run to capture output

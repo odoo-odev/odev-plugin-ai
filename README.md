@@ -8,21 +8,22 @@ This plugin is a foundational component and is used by other plugins such as `sc
 
 ## Prerequisites
 
-For the AI agent to work correctly (especially for `odev pre-commit --ai`), the following tools must be installed on your host system:
+For the AI agent to work correctly (especially for `odev pre-commit --ai`), the following tools must be installed on
+your host system:
 
-- **pre-commit**: Required to run and verify linting checks.
-  ```bash
-  pip install pre-commit
-  ```
-- **ruff**: A fast linter used by many Odoo projects.
-  ```bash
-  pip install ruff
-  ```
-- **RTK (Rust Token Killer)**: Highly recommended for token optimization (saves 60-90% on command outputs).
-  ```bash
-  curl -fsSL https://raw.githubusercontent.com/rtk-ai/rtk/refs/heads/master/install.sh | sh
-  rtk init --global
-  ```
+-   **pre-commit**: Required to run and verify linting checks.
+    ```bash
+    pip install pre-commit
+    ```
+-   **ruff**: A fast linter used by many Odoo projects.
+    ```bash
+    pip install ruff
+    ```
+-   **RTK (Rust Token Killer)**: Highly recommended for token optimization (saves 60-90% on command outputs).
+    ```bash
+    curl -fsSL https://raw.githubusercontent.com/rtk-ai/rtk/refs/heads/master/install.sh | sh
+    rtk init --global
+    ```
 
 ## Configuration
 
@@ -31,5 +32,6 @@ select your preferred LLM provider and enter the corresponding API key.
 
 ## RTK (Rust Token Killer) Integration
 
-`odev` automatically binds your host's `rtk` binary and its cache (`~/.cache/rtk`) into the AI sandbox. 
-If an AI agent (like Claude Code) is configured to use RTK, it will transparently compress terminal outputs, significantly reducing your token consumption.
+`odev` automatically binds your host's `rtk` binary and its cache (`~/.cache/rtk`) into the AI sandbox. If an AI agent
+(like Claude Code) is configured to use RTK, it will transparently compress terminal outputs, significantly reducing
+your token consumption.

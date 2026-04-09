@@ -4,10 +4,9 @@ from odev.common import args, bash
 from odev.common.databases import DummyDatabase
 from odev.common.logging import logging
 
+
 try:
-    from odev.plugins.odev_plugin_project.commands.pre_commit import (
-        PreCommit as BasePreCommit,
-    )
+    from odev.plugins.odev_plugin_project.commands.pre_commit import PreCommit as BasePreCommit
 except ImportError:
     from odev.common.commands import DatabaseOrRepositoryCommand as BasePreCommit
 
@@ -34,11 +33,7 @@ class PreCommit(BasePreCommit, AICommandMixin):
 
     def infer_database_instance(self):
         # Fallback to current repository if neither database nor repository is specified
-        if (
-            not self.database_name
-            and not self.args.repository
-            and (Path.cwd() / ".git").exists()
-        ):
+        if not self.database_name and not self.args.repository and (Path.cwd() / ".git").exists():
             self.args.repository = str(Path.cwd().resolve())
             return DummyDatabase()
         return super().infer_database_instance()
@@ -56,9 +51,7 @@ class PreCommit(BasePreCommit, AICommandMixin):
         repo_path = Path(self._repository.path)
 
         # We create a temporary file INSIDE the repo to ensure the sandbox can read it
-        with tempfile.NamedTemporaryFile(
-            mode="w+", dir=repo_path, suffix=".txt", delete=False
-        ) as tmp:
+        with tempfile.NamedTemporaryFile(mode="w+", dir=repo_path, suffix=".txt", delete=False) as tmp:
             tmp_path = Path(tmp.name)
             try:
                 result = self._run_checks()
@@ -74,12 +67,12 @@ class PreCommit(BasePreCommit, AICommandMixin):
                 logger.info("Launching AI agent to fix pre-commit issues...")
 
                 prompt = f"""
-I ran `pre-commit run --all-files` and it failed. 
+I ran `pre-commit run --all-files` and it failed.
 The full output has been saved to `{tmp_path.name}`.
 
 Please:
 1. Read that file to understand the failures.
-2. Analyze and fix the reported issues. 
+2. Analyze and fix the reported issues.
 3. Run `pre-commit run --all-files` again to verify your fixes.
 4. Once everything passes, commit the fixes with a meaningful message (e.g. "[FIX] module: description") and THEN delete the `{tmp_path.name}` file.
 5. Provide a summary of your changes.
@@ -97,17 +90,11 @@ Please:
         output = []
         try:
             # We use stream to have real-time visibility for the user
-            for line in bash.stream(
-                f"cd {self._repository.path} && pre-commit run --all-files"
-            ):
+            for line in bash.stream(f"cd {self._repository.path} && pre-commit run --all-files"):
                 print(line)
                 output.append(line)
 
-            return bash.CompletedProcess(
-                0, "pre-commit", "\n".join(output).encode(), b""
-            )
+            return bash.CompletedProcess(0, "pre-commit", "\n".join(output).encode(), b"")
         except bash.CalledProcessError as error:
             logger.warning("Pre-commit checks failed.")
-            return bash.CompletedProcess(
-                error.returncode, error.cmd, "\n".join(output).encode(), b""
-            )
+            return bash.CompletedProcess(error.returncode, error.cmd, "\n".join(output).encode(), b"")
