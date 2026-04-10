@@ -12,8 +12,9 @@ This skill provides instructions on how to use `odev` (Odoo Development CLI) dur
 ## 🛑 MANDATORY RULES (ODEV CLI USAGE)
 
 1. **VERSIONING**: You MUST ALWAYS specify the Odoo version explicitly using the `-V <version>` flag for ALL `odev`
-   commands (like `odev run`, `odev create`, `odev test`). If you omit `-V`, `odev` defaults to the `master` version,
-   which will cause your task to fail.
+   commands (like `odev run`, `odev create`, `odev test`). If you omit `-V`, `odev` defaults to the `master` version.
+   While this might be correct if you are targeting master, it is HIGHLY RECOMMENDED to always specify it to ensure
+   the correct environment and dependencies are used.
 
     - **Example**: `odev run -V 19.0 ...`
 
