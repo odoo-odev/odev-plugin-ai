@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 class AICommandMixin:
     """Mixin for commands that use AI agents.
 
-    Provides common arguments: cli, model, llm, yolo.
+    Provides common arguments: cli, model, yolo.
     """
 
     if TYPE_CHECKING:
@@ -45,13 +45,6 @@ class AICommandMixin:
         description="The specific model to use for the chosen AI agent.",
         default=None,
     )
-
-    llm = args.String(
-        aliases=["--llm"],
-        description="The specific LLM model to use (alias for --model).",
-        default=None,
-    )
-
     yolo = args.Flag(
         aliases=["-y", "--yolo"],
         description="Automatically accept all AI commands (YOLO mode).",
@@ -106,7 +99,7 @@ class AICommandMixin:
 
         final_cli = chosen_cli or favorite_cli or "claude"
 
-        chosen_model = self.args.llm or self.args.model
+        chosen_model = self.args.model
         favorite_model = self.config.ai.get_favorite_model(final_cli)
 
         if not chosen_model and not favorite_model:
