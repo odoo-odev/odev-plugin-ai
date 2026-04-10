@@ -38,15 +38,16 @@ class PreCommit(BasePreCommit, AICommandMixin):
         if not self.args.ai and not self.args.run:
             return
 
+        if self._repository.is_protected_branch:
+            raise self.error(
+                f"Repository is on protected branch {self._repository.branch!r}. "
+                "Create a feature branch before running pre-commit checks."
+            )
+
         result = self._run_checks()
 
-        if self._repository.is_dirty:
-            if self._repository.is_protected_branch:
-                logger.warning(
-                    f"Changes detected in protected branch {self._repository.branch!r}, won't auto-commit fixes."
-                )
-            elif self.console.confirm("Do you want to commit auto fixed files?", default=True):
-                self._commit_changes("[REF] pre-commit: auto fix", no_verify=True)
+        if self._repository.is_dirty and self.console.confirm("Do you want to commit auto fixed files?", default=True):
+            self._commit_changes("[REF] pre-commit: auto fix", no_verify=True)
 
         if not self.args.ai:
             return
@@ -68,6 +69,9 @@ Please:
 5. Provide a summary of your changes.
 """
         self.run_ai_agent(prompt, database=self.database_name)
+
+        if self._repository.is_dirty and self.console.confirm("The AI made changes. Do you want to commit them?", default=True):
+            self._commit_changes("[REF] pre-commit: auto fixed by AI", no_verify=True)
 
     def _run_checks(self) -> bash.CompletedProcess | None:
         """Run pre-commit checks on all files and display output in real-time."""
