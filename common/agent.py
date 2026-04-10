@@ -362,9 +362,6 @@ class AgentCLI(BwrapSandbox):
 
         ds = DataStore().secrets
 
-        if self.yolo and not self.headless:
-            logger.info("YOLO mode is enabled. All tool calls will be automatically approved.")
-
         for key in to_process:
             if key in found_secrets:
                 continue
@@ -390,18 +387,10 @@ class AgentCLI(BwrapSandbox):
             except Exception:
                 pass
 
-        aliased_name: str | None = None
         if "GOOGLE_API_KEY" in found_secrets and "GEMINI_API_KEY" not in found_secrets:
-            found_secrets["GEMINI_API_KEY"] = found_secrets["GOOGLE_API_KEY"]
-            aliased_name = "GEMINI_API_KEY"
-        if "GEMINI_API_KEY" in found_secrets and "GOOGLE_API_KEY" not in found_secrets:
-            found_secrets["GOOGLE_API_KEY"] = found_secrets["GEMINI_API_KEY"]
-            aliased_name = "GOOGLE_API_KEY"
-
-        if aliased_name and not self.headless:
-            logger.info(
-                f"Using {found_secrets.get('GOOGLE_API_KEY' if aliased_name == 'GEMINI_API_KEY' else 'GEMINI_API_KEY', '')[:10]}... (aliased to {aliased_name})"
-            )
+            found_secrets["GEMINI_API_KEY"] = found_secrets.pop("GOOGLE_API_KEY")
+        elif "GEMINI_API_KEY" in found_secrets:
+            found_secrets.pop("GOOGLE_API_KEY", None)
 
         if "GITHUB_TOKEN" in found_secrets and "GH_TOKEN" not in found_secrets:
             found_secrets["GH_TOKEN"] = found_secrets["GITHUB_TOKEN"]
