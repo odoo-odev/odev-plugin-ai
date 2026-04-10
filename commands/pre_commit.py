@@ -27,27 +27,23 @@ class PreCommit(BasePreCommit, AICommandMixin):
     )
 
     def infer_database_instance(self):
-        # Fallback to current repository if neither database nor repository is specified
         if not self.database_name and not self.args.repository and (Path.cwd() / ".git").exists():
             self.args.repository = str(Path.cwd().resolve())
             return DummyDatabase()
         return super().infer_database_instance()
 
     def run(self):
-        # Setup the repository first using the base class logic
         super().run()
 
         if not self.args.ai:
             return
 
-        # Run pre-commit checks to find issues
         result = self._run_checks()
 
         if result and result.returncode == 0:
             logger.info("Pre-commit passed!")
             return
 
-        # Pre-commit failed
         logger.info("Launching AI agent to fix pre-commit issues...")
 
         prompt = """
@@ -68,7 +64,6 @@ Please:
 
         output = []
         try:
-            # We use stream to have real-time visibility for the user
             for line in bash.stream(f"cd {self._repository.path} && pre-commit run --all-files"):
                 print(line)
                 output.append(line)
