@@ -392,9 +392,9 @@ class AgentCLI(BwrapSandbox):
         elif "GEMINI_API_KEY" in found_secrets:
             found_secrets.pop("GOOGLE_API_KEY", None)
 
-        if "GITHUB_TOKEN" in found_secrets and "GH_TOKEN" not in found_secrets:
-            found_secrets["GH_TOKEN"] = found_secrets["GITHUB_TOKEN"]
-        if "GH_TOKEN" in found_secrets and "GITHUB_TOKEN" not in found_secrets:
+        if "GITHUB_TOKEN" in found_secrets:
+            found_secrets.setdefault("GH_TOKEN", found_secrets["GITHUB_TOKEN"])
+        elif "GH_TOKEN" in found_secrets:
             found_secrets["GITHUB_TOKEN"] = found_secrets["GH_TOKEN"]
 
         return list(found_secrets.items())

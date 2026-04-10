@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from odev.common import args, bash, progress
+from odev.common import args, bash
 from odev.common.databases import DummyDatabase
 from odev.common.logging import logging
 
@@ -46,7 +46,7 @@ class PreCommit(BasePreCommit, AICommandMixin):
                     f"Changes detected in protected branch {self._repository.branch!r}, won't auto-commit fixes."
                 )
             elif self.console.confirm("Do you want to commit auto fixed files?", default=True):
-                self._commit_auto_fixes()
+                self._commit_changes("[REF] pre-commit: auto fix", no_verify=True)
 
         if not self.args.ai:
             return
@@ -84,16 +84,3 @@ Please:
             logger.warning("Pre-commit checks failed.")
             return bash.CompletedProcess(error.returncode, error.cmd, "\n".join(output).encode(), b"")
 
-    def _commit_auto_fixes(self) -> None:
-        """Commit changes made by pre-commit auto-fixes."""
-        try:
-            repo = self._repository.repository
-            if not repo:
-                return
-
-            with progress.spinner("Committing auto-fixed files"):
-                repo.git.add(".")
-                repo.git.commit("-m", "[REF] pre-commit: auto fix")
-                logger.info(f"Auto-fixed files committed with [REF] prefix in branch {repo.active_branch.name!r}")
-        except Exception as error:
-            logger.error(f"Failed to commit auto-fixed files: {error}")
