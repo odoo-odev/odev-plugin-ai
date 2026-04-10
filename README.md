@@ -8,19 +8,17 @@ This plugin is a foundational component and is used by other plugins such as `sc
 
 ## Prerequisites
 
-For the AI agent to work correctly (especially for `odev pre-commit --ai`), the following tools must be installed on
-your host system:
+For the AI agent to work correctly and efficiently across all tasks (testing, upgrading, pre-commit fixes, etc.), the following tools must be installed on your host system:
 
--   **pre-commit**: Required to run and verify linting checks.
+-   **pre-commit**: Essential for the AI to run and verify linting checks automatically.
     ```bash
     pip install pre-commit
     ```
--   **ruff**: A fast linter used by many Odoo projects.
+-   **ruff**: A primary linter used by the AI agent to analyze and fix code style and quality issues.
     ```bash
     pip install ruff
     ```
--   **RTK (Rust Token Killer)**: Highly recommended for token optimization (saves 60-90% on command outputs). `odev`
-    automatically binds your host's `rtk` binary and its cache (`~/.cache/rtk`) into the AI sandbox.
+-   **RTK (Rust Token Killer)**: **Critical for performance and cost.** It optimizes almost all command outputs sent to the AI (saving 60-90% on token usage). `odev` automatically binds your host's `rtk` binary and its cache (`~/.cache/rtk`) into the AI sandbox.
     ```bash
     curl -fsSL https://raw.githubusercontent.com/rtk-ai/rtk/refs/heads/master/install.sh | sh
     rtk init --global
