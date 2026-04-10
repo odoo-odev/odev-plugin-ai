@@ -104,7 +104,7 @@ class AgentCLI(BwrapSandbox):
                 agent_cmd.extend(["--session", resume])
             if self.model and self.model != "auto":
                 agent_cmd.extend(["-m", self.model])
-        else:  # claude
+        else:
             agent_cmd = ["claude"]
             if prompt:
                 if self.headless:
@@ -152,7 +152,6 @@ class AgentCLI(BwrapSandbox):
         proxy_dir = Path(tempfile.mkdtemp(prefix="odev-ai-pg-"))
         pg_data_dir = Path(tempfile.mkdtemp(prefix="odev-ai-pgdata-"))
 
-        # 1. Bubblewrap Core Initialization
         sandbox_data = self._prepare_sandbox_config(
             sandbox_dirs=sandbox_dirs,
             extra_bind_dirs=extra_bind_dirs,
@@ -164,15 +163,12 @@ class AgentCLI(BwrapSandbox):
         final_binds = sandbox_data["binds"]
         active_venv_path = sandbox_data["active_venv_path"]
 
-        # Default CWD to /custom if available, otherwise host home
         if not cwd:
             cwd = "/custom" if any(b[1] == Path("/custom") for b in final_binds) else str(host_home)
 
-        # 2. Agent Setup
         all_candidate_paths = sandbox_dirs + (extra_bind_dirs or [])
         agent_cmd, agent_dirs, agent_files = self._get_agent_setup(prompt, resume, all_candidate_paths, host_home)
 
-        # 3. Environmental Context Info
         if database:
             db_info = (
                 f"(Environment: You have been granted access to a private, isolated CLONE of the host database '{database}'. "
@@ -186,7 +182,6 @@ class AgentCLI(BwrapSandbox):
             )
         prompt = db_info + prompt
 
-        # 4. Global Paths
         sandbox_path_items = []
         if active_venv_path:
             sandbox_path_items.append(str(active_venv_path / "bin"))
@@ -202,7 +197,6 @@ class AgentCLI(BwrapSandbox):
         )
         sandbox_path = ":".join(sandbox_path_items)
 
-        # 5. Base Bwrap Command
         odev_path = self.odev.path
         cmd = [
             "bwrap",
@@ -245,12 +239,10 @@ class AgentCLI(BwrapSandbox):
             "1",
         ]
 
-        # 6. Secret Handling
         secrets_to_set = self._collect_secrets()
         if database:
             cmd.extend(["--setenv", "PGDATABASE", database])
 
-        # 7. Guest Layout
         top_dirs = {
             "/home",
             "/tmp",
@@ -273,23 +265,18 @@ class AgentCLI(BwrapSandbox):
                     cmd.extend(["--dir", td])
                     top_dirs.add(td)
 
-        # 8. Infrastructure Setup
         self._prepare_odev_config(playground, path_mapping, host_home)
         self._add_system_binds(cmd, host_home, sandbox_tmp, cwd)
 
-        # 9. PostgreSQL Setup
         pg_sandbox = PostgresSandbox(headless=self.headless)
         pg_process = pg_sandbox.setup(cmd, database, proxy_dir, pg_data_dir, ephemeral=ephemeral_pg)
 
-        # 10. RTK Setup
         rtk_path = shutil.which("rtk")
         self._setup_rtk_sandbox(cmd, rtk_path, playground, host_home)
 
-        # 11. Final Bindings & Agent Config
         self._apply_final_bindings(cmd, agent_dirs, agent_files, final_binds, host_home, playground, path_mapping)
         self._prepare_agent_config(playground, all_candidate_paths, host_home)
 
-        # 12. Execute
         cmd.extend(["--", *agent_cmd])
         return self._execute_sandbox(
             cmd=cmd,
@@ -322,7 +309,6 @@ class AgentCLI(BwrapSandbox):
                 data = json.loads(sessions_file.read_text())
                 sessions = data.get("sessions", [])
                 if sessions:
-                    # Return the ID of the latest session
                     return sessions[-1].get("id")
         except Exception:
             pass
@@ -344,13 +330,11 @@ class AgentCLI(BwrapSandbox):
         to_process = relevant.get(self.cli, [])
         found_secrets: dict[str, str] = {}
 
-        # 1. Host Environment Check
         for key in to_process:
             val = os.environ.get(key)
             if val:
                 found_secrets[key] = val
 
-        # 2. Local .env Check (if key missing from env)
         env_file = Path.cwd() / ".env"
         if env_file.exists():
             try:
@@ -365,7 +349,6 @@ class AgentCLI(BwrapSandbox):
             except Exception:
                 pass
 
-        # 3. GitHub Token Fallback
         if "GITHUB_TOKEN" not in found_secrets and "GH_TOKEN" not in found_secrets:
             try:
                 token = subprocess.check_output(
@@ -378,7 +361,6 @@ class AgentCLI(BwrapSandbox):
             except Exception:
                 pass
 
-        # 4. DataStore Check & Prompt
         from odev.common.store.datastore import DataStore
 
         ds = DataStore().secrets
@@ -411,7 +393,6 @@ class AgentCLI(BwrapSandbox):
             except Exception:
                 pass
 
-        # 5. Smart Aliasing (internal mappings for agent compatibility)
         aliased_name: str | None = None
         if "GOOGLE_API_KEY" in found_secrets and "GEMINI_API_KEY" not in found_secrets:
             found_secrets["GEMINI_API_KEY"] = found_secrets["GOOGLE_API_KEY"]

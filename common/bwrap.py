@@ -129,8 +129,6 @@ class BwrapSandbox(OdevFrameworkMixin):
 
         console.print("\n[bold color.cyan]INFRASTRUCTURE & REFERENCE (System/Source/Config):[/bold color.cyan]")
 
-        # We use a dict keyed by (SRC, DST) to strictly deduplicate lines in the display
-        # and ensure a mount point is only listed once with its best permission.
         display_map: dict[tuple[str, str], str] = {}
 
         def _add_to_display(src: str, dst: str, mode: str):
@@ -167,7 +165,6 @@ class BwrapSandbox(OdevFrameworkMixin):
                 else:
                     _add_to_display(edir, edir, "RO")
 
-        # Deduplicate and sort the final display lines
         for line in sorted(display_map.values()):
             console.print(f" • {line}")
 
@@ -297,7 +294,6 @@ class BwrapSandbox(OdevFrameworkMixin):
         """Centralized and 'smart' sandbox binding discovery."""
         from odev.common.databases.local import LocalDatabase
 
-        # 1. Collect all candidates
         # Key: GUEST PATH -> Value: (HOST PATH, RO, IS_PRIMARY)
         candidates: dict[Path, tuple[Path, bool, bool]] = {}
 
@@ -319,7 +315,6 @@ class BwrapSandbox(OdevFrameworkMixin):
 
             candidates[dst_p] = (src_p, ro, is_primary)
 
-        # A. Explicit Binds (User/Command) - Highest Priority
         for i, sdir in enumerate(sandbox_dirs):
             if ":" in sdir:
                 src, dst = sdir.split(":", 1)
@@ -332,7 +327,6 @@ class BwrapSandbox(OdevFrameworkMixin):
             src, dst = edir.split(":", 1) if ":" in edir else (edir, edir)
             _add_candidate(src, dst, ro=True, is_primary=False)
 
-        # B. Setup Containers
         ro_containers = set()
         ro_containers.add(self.odev.home_path / "worktrees")
         ro_containers.add(self.odev.home_path / "plugins")
@@ -342,14 +336,12 @@ class BwrapSandbox(OdevFrameworkMixin):
 
         repo_containers = {Path(r.path).resolve() for r in odoo_repositories(enterprise=True)}
 
-        # C. Automatic Discovery
         for plugin in self.odev.plugins:
             try:
                 res = plugin.path.resolve()
                 if res.exists():
                     # Only mount the plugin itself, NOT its parent (which could be sensitive like odoo-ps)
                     _add_candidate(res, self._map_path(res, path_mapping), ro=True)
-                # Skills Mapping
                 sp = res / "skills"
                 if sp.exists() and sp.is_dir():
                     for skill_pkg in sp.iterdir():
@@ -369,7 +361,6 @@ class BwrapSandbox(OdevFrameworkMixin):
         _add_candidate(odev_path, odev_path, ro=True)
 
         active_venv_path: Path | None = None
-        # Venv/Version discovery
         if database:
             db = LocalDatabase(database)
             if db.exists:
@@ -402,7 +393,6 @@ class BwrapSandbox(OdevFrameworkMixin):
             rp = Path(rtk).resolve()
             _add_candidate(rp, self._map_path(rp, path_mapping), ro=True)
 
-        # E. Add base containers (only if guest path not already claimed)
         # RW takes precedence for the same directory
         for p in rw_containers:
             _add_candidate(p, self._map_path(p, path_mapping), ro=False)
@@ -411,12 +401,10 @@ class BwrapSandbox(OdevFrameworkMixin):
         for p in repo_containers:
             _add_candidate(p, self._map_path(p, path_mapping), ro=True)
 
-        # 2. Consolidate Pool
         pool: dict[Path, tuple[Path, bool, bool]] = {}
         for dst_p, (src_p, ro_v, prim_v) in candidates.items():
             self._add_bind(pool, src_p, dst_p, ro=ro_v, is_primary=prim_v)
 
-        # 3. Final Nesting Deduction
         final_pool: list[tuple[Path, Path, bool, bool]] = []
         # Sort by guest path depth so parents come first
         sorted_dsts = sorted(pool.keys(), key=lambda d: len(d.parts))
@@ -540,7 +528,6 @@ class BwrapSandbox(OdevFrameworkMixin):
             target_dir = playground / rel_dir
             target_dir.mkdir(parents=True, exist_ok=True)
 
-            # 1. Copy Credentials
             creds_files = [
                 "gemini-credentials.json",
                 "google_accounts.json",
@@ -552,7 +539,6 @@ class BwrapSandbox(OdevFrameworkMixin):
                 if hcf.exists():
                     shutil.copy2(hcf, target_dir / cf)
 
-            # 2. Forge Workspace Trust
             # We explicitly trust all virtualized sandbox paths
             trusted_paths = [
                 "/skills",
@@ -602,14 +588,12 @@ class BwrapSandbox(OdevFrameworkMixin):
         path_mapping=None,
     ):
         """Apply all final agent-specific and workspace bindings."""
-        # 1. Agent dirs & files first (usually ~/.local ~/.cache)
         for d in agent_dirs:
             cmd.extend(["--bind-try", str(d), str(d)])
         for f in agent_files:
             if f.exists():
                 cmd.extend(["--bind-try", str(f), str(f)])
 
-        # 2. Apply the sorted binds (parents before children)
         # final_binds is already sorted by depth from _prepare_sandbox_config
         for src, dst, ro, is_primary in final_binds:
             try:
@@ -621,7 +605,6 @@ class BwrapSandbox(OdevFrameworkMixin):
                 pass
             cmd.extend(["--ro-bind-try" if ro else "--bind-try", str(src), str(dst)])
 
-        # 4. Create compatibility symlinks for host paths in playground
         # This fixes 'gitdir' issues where Git metadata stores absolute host paths
         # that must be resolvable in the sandbox guest.
         if path_mapping:
@@ -744,7 +727,6 @@ class BwrapSandbox(OdevFrameworkMixin):
 
         config_file.write_text(content)
 
-        # 2. Rewrite symlinks in plugins directory
         # Host symlinks typically point to absolute host paths which are broken in the virtualized sandbox.
         plugins_dir = sandbox_config_dir / "plugins"
         if plugins_dir.exists():

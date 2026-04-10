@@ -33,7 +33,6 @@ class PostgresSandbox(OdevFrameworkMixin):
         else:
             host_socket_dir = Path("/var/run/postgresql")
 
-        # 1. Ephemeral Cluster Setup
         if ephemeral:
             pg_process = self._start_ephemeral_postgres(proxy_dir, pg_data_dir)
             if pg_process:
@@ -63,7 +62,6 @@ class PostgresSandbox(OdevFrameworkMixin):
         logger.info(f"Cloning host database data for {database!r} into ephemeral cluster...")
         user = Path.home().name
         try:
-            # 1. Pipe pg_dump from host to psql in ephemeral
             # We assume the database has already been created in the caller
             dump_cmd = [
                 "pg_dump",

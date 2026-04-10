@@ -79,7 +79,6 @@ class AICommandMixin:
         chosen_cli = self.args.cli
         favorite_cli = self.config.ai.favorite_cli
 
-        # 1. Determine the CLI first
         if not favorite_cli:
             available = [c for c in all_clis if shutil.which(c)]
             if not available:
@@ -107,7 +106,6 @@ class AICommandMixin:
 
         final_cli = chosen_cli or favorite_cli or "claude"
 
-        # 2. Determine the Model (specific to the CLI)
         chosen_model = self.args.llm or self.args.model
         favorite_model = self.config.ai.get_favorite_model(final_cli)
 
@@ -165,12 +163,10 @@ class AICommandMixin:
         """Helper to run the AI agent with common Odoo-related sandbox paths."""
         agent = self.get_ai_agent()
 
-        # Collect unique directories containing the addons
         paths = set()
         if hasattr(self, "odoobin") and self.odoobin:
             paths.update([p.as_posix() for p in self.odoobin.addons_paths if p.exists()])
 
-        # Ensure the current directory (where the log file might be) is also included
         paths.add(Path.cwd().as_posix())
 
         return agent.run(
