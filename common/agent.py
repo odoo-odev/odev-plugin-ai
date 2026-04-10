@@ -63,7 +63,7 @@ class AgentCLI(BwrapSandbox):
                 agent_cmd.extend(["-m", self.model])
 
             # Use specific guest paths for indexing
-            indexing_whitelist = ["/skills", "/knowledge", "/custom", str(host_home / ".odev")]
+            indexing_whitelist = ["/knowledge", "/custom", "/worktrees", str(host_home / ".odev")]
             for d in all_candidate_paths:
                 agent_path = d.split(":", 1)[1] if ":" in d else d
                 if any(agent_path.startswith(w) for w in indexing_whitelist):
@@ -104,6 +104,9 @@ class AgentCLI(BwrapSandbox):
                 agent_cmd.extend(["--session", resume])
             if self.model and self.model != "auto":
                 agent_cmd.extend(["-m", self.model])
+            for d in all_candidate_paths:
+                agent_path = d.split(":", 1)[1] if ":" in d else d
+                agent_cmd.extend(["--add-dir", agent_path])
         else:
             agent_cmd = ["claude"]
             if prompt:
@@ -164,8 +167,12 @@ class AgentCLI(BwrapSandbox):
         if not cwd:
             cwd = "/custom" if any(b[1] == Path("/custom") for b in final_binds) else str(host_home)
 
-        # Tous les binds où src != dst sont des shortcuts Type B (/custom, /upgrade, /skills/*, ...)
+        # Tous les binds où src != dst sont des shortcuts Type B (/custom, /upgrade, /worktrees, ...)
         all_candidate_paths = [f"{src}:{dst}" for src, dst, _, _ in final_binds if src != dst]
+        # Sync path_mapping with Type B binds so _prepare_odev_config rewrites paths correctly
+        for src, dst, _, _ in final_binds:
+            if src != dst:
+                path_mapping.setdefault(str(src), str(dst))
         agent_cmd, agent_dirs, agent_files = self._get_agent_setup(prompt, resume, all_candidate_paths, host_home)
 
         if database:

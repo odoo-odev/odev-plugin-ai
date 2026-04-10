@@ -82,7 +82,9 @@ class BwrapSandbox(OdevFrameworkMixin):
         for src, dst, ro, primary in binds:
             if not primary:
                 mode = "RO" if ro else "RW"
-                label = f"{src} [bold color.green]-> {dst}[/bold color.green] ({mode})" if src != dst else f"{src} ({mode})"
+                label = (
+                    f"{src} [bold color.green]-> {dst}[/bold color.green] ({mode})" if src != dst else f"{src} ({mode})"
+                )
                 console.print(f" • {label}")
 
         if not self.yolo and not console.bypass_prompt:
@@ -214,28 +216,26 @@ class BwrapSandbox(OdevFrameworkMixin):
                 return None
             return (p, Path(dst) if dst else p, ro, primary)
 
-        binds = list(filter(None, [
-            # Type B — workspace utilisateur (primary, RW)
-            *[bind(*s.split(":", 1) if ":" in s else (s, "/custom"), ro=False, primary=True)
-              for s in sandbox_dirs],
-            # Type B — extra dirs fournis par l'appelant (RO)
-            *[bind(*e.split(":", 1) if ":" in e else (e, e))
-              for e in (extra_bind_dirs or [])],
-
-            # Type A — infrastructure odev (parents montent les enfants, pas de dedup)
-            bind(self.odev.path),
-            bind(self.odev.home_path / "plugins"),
-            bind(self.odev.home_path / "worktrees"),
-            bind(self.odev.home_path / "virtualenvs", ro=False),
-            *[bind(r.path) for r in odoo_repositories(enterprise=True)],
-
-            # Type B — skills shortcuts (seul cas découvert dynamiquement)
-            *[bind(sp, f"/skills/{sp.name}")
-              for plugin in self.odev.plugins
-              for sp in ((Path(plugin.path) / "skills").iterdir()
-                         if (Path(plugin.path) / "skills").is_dir() else [])
-              if sp.is_dir()],
-        ]))
+        binds = list(
+            filter(
+                None,
+                [
+                    # Type B — workspace utilisateur (primary, RW)
+                    *[
+                        bind(s.split(":", 1)[0], s.split(":", 1)[1] if ":" in s else "/custom", ro=False, primary=True)
+                        for s in sandbox_dirs
+                    ],
+                    # Type B — extra dirs fournis par l'appelant (RO)
+                    *[bind(e.split(":", 1)[0], e.split(":", 1)[1] if ":" in e else e) for e in (extra_bind_dirs or [])],
+                    # Type A — infrastructure odev (parents montent les enfants, pas de dedup)
+                    bind(self.odev.path),
+                    bind(self.odev.home_path / "plugins"),
+                    bind(self.odev.home_path / "worktrees", "/worktrees"),
+                    bind(self.odev.home_path / "virtualenvs", ro=False),
+                    *[bind(r.path) for r in odoo_repositories(enterprise=True)],
+                ],
+            )
+        )
 
         return {"binds": binds, "active_venv_path": self._resolve_active_venv(database, version)}
 
@@ -344,6 +344,13 @@ class BwrapSandbox(OdevFrameworkMixin):
         """Create a sanitized agent configuration inside the sandbox playground."""
         # The playground becomes 'host_home' in the bwrap sandbox
         # We need to create .gemini, .config/gemini, .claude, etc.
+        # Primary config dir + MD file that supports @imports (skills injection)
+        skill_targets = {
+            "gemini": (".gemini", "GEMINI.md"),
+            "claude": (".claude", "CLAUDE.md"),
+            "opencode-cli": (".claude", "CLAUDE.md"),
+        }
+
         configs = {
             "gemini": [".gemini", ".config/gemini"],
             "claude": [".claude", ".config/claude"],
@@ -366,9 +373,7 @@ class BwrapSandbox(OdevFrameworkMixin):
                 if hcf.exists():
                     shutil.copy2(hcf, target_dir / cf)
 
-            # We explicitly trust all virtualized sandbox paths
             trusted_paths = [
-                "/skills",
                 "/knowledge",
                 "/custom",
                 "/worktree",
@@ -377,10 +382,44 @@ class BwrapSandbox(OdevFrameworkMixin):
                 "/upgrade",
                 "/dumps",
             ]
-            # Add any other dynamic guest paths
             for d in all_candidate_paths:
                 if ":" in d:
                     trusted_paths.append(d.split(":")[1])
+
+        # Inject skills into the CLI's native context
+        if primary := skill_targets.get(self.cli):
+            rel_dir, md_filename = primary
+            target_dir = playground / rel_dir
+            target_dir.mkdir(parents=True, exist_ok=True)
+            skills_dest = target_dir / "skills"
+            skill_refs = []
+            for plugin in self.odev.plugins:
+                skills_dir = Path(plugin.path) / "skills"
+                if not skills_dir.is_dir():
+                    continue
+                for skill_pkg in skills_dir.iterdir():
+                    if not skill_pkg.is_dir() or not (skill_pkg / "SKILL.md").exists():
+                        continue
+                    skills_dest.mkdir(exist_ok=True)
+                    if self.cli == "gemini":
+                        # Gemini native skills: copy the entire package dir so
+                        # ~/.gemini/skills/{name}/SKILL.md is discovered by /skills list
+                        dest = skills_dest / skill_pkg.name
+                        if dest.exists():
+                            shutil.rmtree(dest)
+                        shutil.copytree(skill_pkg, dest)
+                    else:
+                        # Claude / opencode-cli: inject via @import in the MD file
+                        shutil.copy2(skill_pkg / "SKILL.md", skills_dest / f"{skill_pkg.name}.md")
+                        skill_refs.append(f"@skills/{skill_pkg.name}.md")
+            # Only Claude/opencode-cli use the @import mechanism
+            if skill_refs:
+                md_file = target_dir / md_filename
+                existing = md_file.read_text() if md_file.exists() else ""
+                with open(md_file, "a") as f:
+                    if existing and not existing.endswith("\n"):
+                        f.write("\n")
+                    f.write("\n".join(skill_refs) + "\n")
 
             trust_data = {p: "TRUST_FOLDER" for p in sorted(set(trusted_paths))}
             try:
@@ -424,10 +463,15 @@ class BwrapSandbox(OdevFrameworkMixin):
         # final_binds is already sorted by depth from _prepare_sandbox_config
         for src, dst, ro, is_primary in final_binds:
             try:
-                # Only attempt to create directories in playground if dst is under host_home
+                # Create the destination path inside the playground so bwrap can mount on top of it.
+                # (--bind-try only skips a missing SOURCE; missing DESTINATION still errors.)
                 if str(dst).startswith(str(host_home)):
                     rel = dst.relative_to(host_home)
-                    (playground / rel).parent.mkdir(parents=True, exist_ok=True)
+                    dst_in_playground = playground / rel
+                    if src.is_dir():
+                        dst_in_playground.mkdir(parents=True, exist_ok=True)
+                    else:
+                        dst_in_playground.parent.mkdir(parents=True, exist_ok=True)
             except Exception:
                 pass
             cmd.extend(["--ro-bind-try" if ro else "--bind-try", str(src), str(dst)])
