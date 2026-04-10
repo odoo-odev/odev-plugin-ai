@@ -38,7 +38,6 @@ class TestCommand(BaseTestCommand, AICommandMixin):
                 raise
             logger.info("Tests failed. Capturing logs and launching AI agent...")
 
-        # Reconstruct the command string for the AI agent
         args_to_pass = [a for a in self._argv if a not in ("--ai",)]
 
         if self.auto_tags:
@@ -46,7 +45,6 @@ class TestCommand(BaseTestCommand, AICommandMixin):
 
         cmd_to_run = f"odev test {' '.join(args_to_pass)}"
 
-        # Save failure logs to a file in the current directory
         log_file = Path(".odev-test-failures.log").resolve()
         log_file.write_text("\n".join(self.test_buffer))
 

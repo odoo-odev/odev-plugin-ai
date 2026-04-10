@@ -46,16 +46,12 @@ class RunCommand(BaseRunCommand, AICommandMixin):
             logger.error(f"Unexpected error during Odoo execution: {e}")
             raise
 
-        # Reconstruct the command string for the AI agent
-        # self._argv contains the arguments passed after 'odev run'
         args_to_pass = [a for a in self._argv if a not in ("--ai",)]
         cmd_to_run = f"odev run {' '.join(args_to_pass)}"
 
-        # Ensure --stop-after-init is there if they want it to terminate after init
         if "--stop-after-init" not in cmd_to_run:
             cmd_to_run += " --stop-after-init"
 
-        # Save failure logs to a file in the current directory
         log_file = Path(".odev-run-failures.log").resolve()
         log_file.write_text("\n".join(self.run_buffer))
 
