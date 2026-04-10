@@ -70,7 +70,9 @@ Please:
 """
         self.run_ai_agent(prompt, database=self.database_name)
 
-        if self._repository.is_dirty and self.console.confirm("The AI made changes. Do you want to commit them?", default=True):
+        if self._repository.is_dirty and self.console.confirm(
+            "The AI made changes. Do you want to commit them?", default=True
+        ):
             self._commit_changes("[REF] pre-commit: auto fixed by AI", no_verify=True)
 
     def _run_checks(self) -> bash.CompletedProcess | None:
@@ -87,4 +89,3 @@ Please:
         except bash.CalledProcessError as error:
             logger.warning("Pre-commit checks failed.")
             return bash.CompletedProcess(error.returncode, error.cmd, "\n".join(output).encode(), b"")
-
