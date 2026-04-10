@@ -157,8 +157,6 @@ class AgentCLI(BwrapSandbox):
             extra_bind_dirs=extra_bind_dirs,
             database=database,
             version=version,
-            path_mapping=path_mapping,
-            host_home=host_home,
         )
         final_binds = sandbox_data["binds"]
         active_venv_path = sandbox_data["active_venv_path"]
@@ -166,7 +164,8 @@ class AgentCLI(BwrapSandbox):
         if not cwd:
             cwd = "/custom" if any(b[1] == Path("/custom") for b in final_binds) else str(host_home)
 
-        all_candidate_paths = sandbox_dirs + (extra_bind_dirs or [])
+        # Tous les binds où src != dst sont des shortcuts Type B (/custom, /upgrade, /skills/*, ...)
+        all_candidate_paths = [f"{src}:{dst}" for src, dst, _, _ in final_binds if src != dst]
         agent_cmd, agent_dirs, agent_files = self._get_agent_setup(prompt, resume, all_candidate_paths, host_home)
 
         if database:
@@ -283,12 +282,10 @@ class AgentCLI(BwrapSandbox):
             agent_dirs=agent_dirs,
             agent_files=agent_files,
             final_binds=final_binds,
-            extra_bind_dirs=extra_bind_dirs,
             database=database,
             db_user=db_user,
             secrets_to_set=secrets_to_set,
             pg_process=pg_process,
-            sandbox_dirs=sandbox_dirs,
             playground=playground,
             sandbox_tmp=sandbox_tmp,
             proxy_dir=proxy_dir,
