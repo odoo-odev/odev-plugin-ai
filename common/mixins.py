@@ -119,7 +119,7 @@ class AICommandMixin:
                 ],
                 "gemini": [
                     ("auto", "auto"),
-                    ("gemini-3-flash-preview", "gemini-3-flash-preview"),
+                    ("gemini-3.1-flash", "gemini-3.1-flash"),
                 ],
                 "copilot": [
                     ("auto", "auto"),
