@@ -152,7 +152,35 @@ class AICommandMixin:
             yolo=self.args.yolo,
         )
 
-    def run_ai_agent(self, prompt: str, database: str | None = None) -> bool:
+    def _prepare_odoo_environment(self, versions: list[str]) -> dict[str, bool]:
+        """Ensure required Odoo worktrees are present and up-to-date.
+
+        For each version, clones the worktree if missing then pulls the latest.
+        Returns a mapping of version → bool indicating whether the worktree is
+        available after the attempt. Callers can use this to conditionally include
+        source-code context in their AI prompt.
+        """
+        available: dict[str, bool] = {}
+        for version in versions:
+            if not version:
+                continue
+            logger.info(f"Preparing Odoo {version} environment...")
+            worktree_path = self.odev.worktrees_path / version
+            try:
+                if not worktree_path.exists():
+                    self.odev.run_command("worktree", "-C", version, "-V", version)
+                self.odev.run_command("pull", "-V", version)
+            except Exception as e:
+                logger.warning(f"Could not prepare Odoo {version} environment: {e}")
+            available[version] = worktree_path.exists()
+        return available
+
+    def run_ai_agent(
+        self,
+        prompt: str,
+        database: str | None = None,
+        ephemeral_pg: bool = True,
+    ) -> bool:
         """Helper to run the AI agent with common Odoo-related sandbox paths."""
         agent = self.get_ai_agent()
 
@@ -169,4 +197,5 @@ class AICommandMixin:
             sandbox_dirs=list(paths),
             database=database,
             resume=self.args.resume,
+            ephemeral_pg=ephemeral_pg,
         )
