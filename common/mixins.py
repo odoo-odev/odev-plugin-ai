@@ -147,6 +147,29 @@ class AICommandMixin:
             headless=self.args.headless,
         )
 
+    def _prepare_odoo_environment(self, versions: list[str]) -> dict[str, bool]:
+        """Ensure required Odoo worktrees are present and up-to-date.
+
+        For each version, clones the worktree if missing then pulls the latest.
+        Returns a mapping of version → bool indicating whether the worktree is
+        available after the attempt. Callers can use this to conditionally include
+        source-code context in their AI prompt.
+        """
+        available: dict[str, bool] = {}
+        for version in versions:
+            if not version:
+                continue
+            logger.info(f"Preparing Odoo {version} environment...")
+            worktree_path = self.odev.worktrees_path / version
+            try:
+                if not worktree_path.exists():
+                    self.odev.run_command("worktree", "-C", version, "-V", version)
+                self.odev.run_command("pull", "-V", version)
+            except Exception as e:
+                logger.warning(f"Could not prepare Odoo {version} environment: {e}")
+            available[version] = worktree_path.exists()
+        return available
+
     def run_ai_agent(
         self,
         prompt: str,
