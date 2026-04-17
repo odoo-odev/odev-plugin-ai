@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 class AICommandMixin:
     """Mixin for commands that use AI agents.
 
-    Provides common arguments: cli, model, llm, yolo.
+    Provides common arguments: cli, model, yolo.
     """
 
     if TYPE_CHECKING:
@@ -45,16 +45,15 @@ class AICommandMixin:
         description="The specific model to use for the chosen AI agent.",
         default=None,
     )
-
-    llm = args.String(
-        aliases=["--llm"],
-        description="The specific LLM model to use (alias for --model).",
-        default=None,
-    )
-
     yolo = args.Flag(
         aliases=["-y", "--yolo"],
         description="Automatically accept all AI commands (YOLO mode).",
+        default=False,
+    )
+
+    headless = args.Flag(
+        aliases=["-H", "--headless"],
+        description="Run the AI agent in non-interactive (headless) mode.",
         default=False,
     )
 
@@ -73,7 +72,6 @@ class AICommandMixin:
         chosen_cli = self.args.cli
         favorite_cli = self.config.ai.favorite_cli
 
-        # 1. Determine the CLI first
         if not favorite_cli:
             available = [c for c in all_clis if shutil.which(c)]
             if not available:
@@ -101,30 +99,11 @@ class AICommandMixin:
 
         final_cli = chosen_cli or favorite_cli or "claude"
 
-        # 2. Determine the Model (specific to the CLI)
-        chosen_model = self.args.llm or self.args.model
+        chosen_model = self.args.model
         favorite_model = self.config.ai.get_favorite_model(final_cli)
 
         if not chosen_model and not favorite_model:
-            model_choices = {
-                "claude": [
-                    ("auto", "auto"),
-                    ("claude-3-5-sonnet-latest", "claude-3-5-sonnet-latest"),
-                ],
-                "gemini": [
-                    ("auto", "auto"),
-                    ("gemini-1.5-pro", "gemini-1.5-pro"),
-                    ("gemini-2.0-flash", "gemini-2.0-flash"),
-                    ("gemini-3-flash-preview", "gemini-3-flash-preview"),
-                ],
-                "copilot": [
-                    ("auto", "auto"),
-                    ("gpt-4o", "gpt-4o"),
-                    ("claude-3.5-sonnet", "claude-3.5-sonnet"),
-                ],
-            }
-            choices = model_choices.get(final_cli, [("auto", "auto")])
-            choices.append(("other", "Other (type it manually)"))
+            choices = [("auto", "auto"), ("other", "Other (type it manually)")]
 
             favorite_model = self.console.select(
                 f"Which model do you want to use for '{final_cli}' as your favorite?",
@@ -150,6 +129,7 @@ class AICommandMixin:
             cli=final_cli,
             model=final_model,
             yolo=self.args.yolo,
+            headless=self.args.headless,
         )
 
     def _prepare_odoo_environment(self, versions: list[str]) -> dict[str, bool]:
@@ -184,12 +164,10 @@ class AICommandMixin:
         """Helper to run the AI agent with common Odoo-related sandbox paths."""
         agent = self.get_ai_agent()
 
-        # Collect unique directories containing the addons
         paths = set()
         if hasattr(self, "odoobin") and self.odoobin:
             paths.update([p.as_posix() for p in self.odoobin.addons_paths if p.exists()])
 
-        # Ensure the current directory (where the log file might be) is also included
         paths.add(Path.cwd().as_posix())
 
         return agent.run(

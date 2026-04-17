@@ -4,7 +4,6 @@ from pathlib import Path
 
 from odev.common import args
 from odev.common.commands import DatabaseCommand
-from odev.common.errors.commands import CommandError
 from odev.common.logging import logging
 
 from odev.plugins.odev_plugin_ai.common.mixins import AICommandMixin
@@ -32,14 +31,17 @@ class AICommand(DatabaseCommand, AICommandMixin):
 
     dirs = args.List(
         aliases=["-d", "--dirs"],
-        description="Comma-separated list of directories to include in the sandbox (read-write). Defaults to the current directory.",
+        description="Comma-separated list of directories to include in the sandbox (read-write). Defaults to the current directory.",  # noqa: B950
         default=[Path(".").resolve()],
     )
 
     def infer_database_instance(self):
         try:
             return super().infer_database_instance()
-        except CommandError:
+        except Exception:
+            # The first positional arg may be the start of the prompt (not a real database name).
+            # Catching broadly here prevents SQL syntax errors when the "name" contains characters
+            # like apostrophes (e.g. French text) that break raw-string SQL in database_exists().
             from odev.common.databases import DummyDatabase
 
             return DummyDatabase()
@@ -54,20 +56,9 @@ class AICommand(DatabaseCommand, AICommandMixin):
             prompt_parts.insert(0, database_name)
             database_name = None
 
-        prompt_text = " ".join(prompt_parts)
-
-        # Ensure dirs are absolute paths and strings
-        sandbox_dirs = [str(Path(d).resolve()) for d in self.args.dirs]
-
-        agent = self.get_ai_agent()
-
-        logger.info(f"Launching AI agent '{agent.cli}' with sandbox directories: {', '.join(sandbox_dirs)}")
-        if database_name:
-            logger.info(f"Using database '{database_name}' for environment detection")
-
-        agent.run(
-            prompt_text,
-            sandbox_dirs,
+        self.get_ai_agent().run(
+            prompt=" ".join(prompt_parts),
+            sandbox_dirs=[str(Path(d).resolve()) for d in self.args.dirs],
             database=database_name,
             resume=self.args.resume,
         )
