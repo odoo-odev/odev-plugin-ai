@@ -206,19 +206,19 @@ class BwrapSandbox(OdevFrameworkMixin):
             filter(
                 None,
                 [
-                    # Type B — workspace utilisateur (primary, RW)
+                    # Type B — user workspace (primary, RW)
                     *[
                         bind(s.split(":", 1)[0], s.split(":", 1)[1] if ":" in s else "/custom", ro=False, primary=True)
                         for s in sandbox_dirs
                     ],
-                    # Type B — extra dirs fournis par l'appelant (RO)
+                    # Type B — extra dirs provided by the caller (RO)
                     *[bind(e.split(":", 1)[0], e.split(":", 1)[1] if ":" in e else e) for e in (extra_bind_dirs or [])],
-                    # Type A — infrastructure odev (parents montent les enfants, pas de dedup)
+                    # Type A — odev infrastructure (parents are mounted before children, no dedup)
                     bind(self.odev.path),
                     bind(self.odev.home_path / "plugins"),
                     bind(self.odev.home_path / "worktrees", "/worktrees", ro=False),
                     bind(self.odev.home_path / "virtualenvs", ro=False),
-                    *[bind(r.path) for r in odoo_repositories(enterprise=True)],
+                    *[bind(r.path, ro=False) for r in odoo_repositories(enterprise=True)],
                 ],
             )
         )
