@@ -103,22 +103,7 @@ class AICommandMixin:
         favorite_model = self.config.ai.get_favorite_model(final_cli)
 
         if not chosen_model and not favorite_model:
-            model_choices = {
-                "claude": [
-                    ("auto", "auto"),
-                    ("claude-haiku-4-5", "claude-haiku-4-5"),
-                ],
-                "gemini": [
-                    ("auto", "auto"),
-                    ("gemini-3.1-flash", "gemini-3.1-flash"),
-                ],
-                "copilot": [
-                    ("auto", "auto"),
-                    ("gpt-5.4-mini", "gpt-5.4-mini"),
-                ],
-            }
-            choices = model_choices.get(final_cli, [("auto", "auto")])
-            choices.append(("other", "Other (type it manually)"))
+            choices = [("auto", "auto"), ("other", "Other (type it manually)")]
 
             favorite_model = self.console.select(
                 f"Which model do you want to use for '{final_cli}' as your favorite?",

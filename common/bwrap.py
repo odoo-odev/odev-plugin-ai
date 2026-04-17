@@ -50,30 +50,34 @@ class BwrapSandbox(OdevFrameworkMixin):
 
         console.rule(string.stylize("AI SANDBOX SECURITY WARNING", "bold color.red"), style="color.red")
         console.print(
-            "\n[bold color.yellow]ATTENTION:[/bold color.yellow] You are running an AI agent in a sandboxed environment."
+            f"\n{string.stylize('ATTENTION:', 'bold color.yellow')} You are running an AI agent in a sandboxed environment."
         )
         console.print("The agent can read/write files and access the database within this sandbox.")
 
-        console.print("\n[bold color.cyan]PRIMARY WORKSPACES (Read-Write Access):[/bold color.cyan]")
-        for src, dst, ro, primary in binds:
+        console.print(f"\n{string.stylize('PRIMARY WORKSPACES (Read-Write Access):', 'bold color.cyan')}")
+        for src, dst, _ro, primary in binds:
             if primary:
-                label = f"{src} [bold color.green]-> {dst}[/bold color.green]" if src != dst else str(src)
+                label = f"{src} {string.stylize(f'-> {dst}', 'bold color.green')}" if src != dst else str(src)
                 console.print(f" • {label}")
 
-        console.print("\n[bold color.cyan]DATABASE ACCESS:[/bold color.cyan]")
+        console.print(f"\n{string.stylize('DATABASE ACCESS:', 'bold color.cyan')}")
         if database:
-            console.print(f" • Database: [color.purple]{database}[/color.purple]")
-            console.print(f" • User:     [color.purple]{db_user or 'default'}[/color.purple]")
+            console.print(f" • Database: {string.stylize(database, 'color.purple')}")
+            console.print(f" • User:     {string.stylize(db_user or 'default', 'color.purple')}")
         else:
-            console.print(" • [color.green]Isolating (Empty ephemeral cluster, no database copied)[/color.green]")
+            console.print(
+                f" • {string.stylize('Isolating (Empty ephemeral cluster, no database copied)', 'color.green')}"
+            )
 
         if database and not ephemeral_pg:
+            warning = string.stylize("WARNING:", "bold color.red")
+            host = string.stylize("HOST", "bold")
+            console.print(f"\n{warning} You are granting access to your {host} PostgreSQL cluster.")
             console.print(
-                "\n[bold color.red]WARNING:[/bold color.red] You are granting access to your [bold]HOST[/bold] PostgreSQL cluster."
+                f"The agent will be able to see and potentially access {string.stylize('ALL', 'bold')} your local databases."
             )
-            console.print("The agent will be able to see and potentially access [bold]ALL[/bold] your local databases.")
 
-        console.print("\n[bold color.cyan]INFRASTRUCTURE & REFERENCE (System/Source/Config):[/bold color.cyan]")
+        console.print(f"\n{string.stylize('INFRASTRUCTURE & REFERENCE (System/Source/Config):', 'bold color.cyan')}")
         for d in agent_dirs:
             console.print(f" • {d} (RW)")
         for f in agent_files:
@@ -83,7 +87,9 @@ class BwrapSandbox(OdevFrameworkMixin):
             if not primary:
                 mode = "RO" if ro else "RW"
                 label = (
-                    f"{src} [bold color.green]-> {dst}[/bold color.green] ({mode})" if src != dst else f"{src} ({mode})"
+                    f"{src} {string.stylize(f'-> {dst}', 'bold color.green')} ({mode})"
+                    if src != dst
+                    else f"{src} ({mode})"
                 )
                 console.print(f" • {label}")
 
@@ -143,23 +149,20 @@ class BwrapSandbox(OdevFrameworkMixin):
     def _setup_rtk_sandbox(
         self,
         cmd: list[str],
-        rtk_path: str | None,
         playground: Path,
         host_home: Path,
     ):
-        """Perform automatic RTK initialization and bind hooks to the sandbox."""
-        if not rtk_path:
-            return
+        """Copy the host RTK configuration into the sandbox playground.
 
-        rtk_flags = ["init", "-g", "--auto-patch"]
-        if self.cli == "gemini":
-            rtk_flags.append("--gemini")
-        elif self.cli == "copilot":
-            rtk_flags.append("--copilot")
-        elif self.cli == "opencode-cli":
-            rtk_flags.append("--opencode")
-        else:
-            rtk_flags.extend(["--agent", "claude"])
+        RTK is assumed to be pre-configured as a hook in the agent's settings
+        on the host. We copy settings.json and the hooks directory into the
+        playground (which is mounted as HOME inside the sandbox) so that those
+        hooks are active without needing to re-run ``rtk init``.
+        ~/.local (and therefore the rtk binary + ~/.local/share/rtk) is already
+        covered by agent_dirs. Only ~/.config/rtk needs an explicit bind.
+        """
+        if not shutil.which("rtk"):
+            return
 
         agent_config_dirs = {
             "gemini": host_home / ".gemini",
@@ -171,35 +174,18 @@ class BwrapSandbox(OdevFrameworkMixin):
         if host_config_dir and host_config_dir.exists():
             sandbox_config_path = playground / host_config_dir.relative_to(host_home)
             sandbox_config_path.mkdir(parents=True, exist_ok=True)
-            s_json = host_config_dir / "settings.json"
-            if s_json.exists():
-                shutil.copy2(s_json, sandbox_config_path / "settings.json")
+            for name in ("settings.json", "hooks"):
+                src = host_config_dir / name
+                dst = sandbox_config_path / name
+                if src.exists() and not dst.exists():
+                    if src.is_dir():
+                        shutil.copytree(src, dst)
+                    else:
+                        shutil.copy2(src, dst)
 
-        try:
-            subprocess.run(
-                [rtk_path] + rtk_flags,
-                env={**os.environ, "HOME": str(playground)},
-                capture_output=True,
-                check=False,
-            )
-            logger.debug(f"Successfully initialized RTK for {self.cli} in sandbox")
-
-            for rel_path in [
-                ".claude/settings.json",
-                ".claude/CLAUDE.md",
-                ".claude/RTK.md",
-                ".claude/hooks",
-                ".gemini/settings.json",
-                ".gemini/GEMINI.md",
-                ".gemini/hooks",
-                ".config/rtk",
-                ".local/share/rtk",
-            ]:
-                p = playground / rel_path
-                if p.exists():
-                    cmd.extend(["--bind", str(p), str(host_home / rel_path)])
-        except Exception as e:
-            logger.warning(f"Failed to auto-initialize RTK in sandbox: {e}")
+        rtk_config = host_home / ".config" / "rtk"
+        if rtk_config.exists():
+            cmd.extend(["--bind", str(rtk_config), str(host_home / ".config" / "rtk")])
 
     def _prepare_sandbox_config(
         self,
@@ -335,7 +321,7 @@ class BwrapSandbox(OdevFrameworkMixin):
             ]
         )
 
-    def _prepare_agent_config(
+    def _prepare_agent_config(  # noqa: C901
         self,
         playground: Path,
         all_candidate_paths: list[str],
@@ -421,7 +407,7 @@ class BwrapSandbox(OdevFrameworkMixin):
                         f.write("\n")
                     f.write("\n".join(skill_refs) + "\n")
 
-            trust_data = {p: "TRUST_FOLDER" for p in sorted(set(trusted_paths))}
+            trust_data = dict.fromkeys(sorted(set(trusted_paths)), "TRUST_FOLDER")
             try:
                 (target_dir / "trustedFolders.json").write_text(json.dumps(trust_data, indent=2))
 
@@ -461,7 +447,7 @@ class BwrapSandbox(OdevFrameworkMixin):
                 cmd.extend(["--bind-try", str(f), str(f)])
 
         # final_binds is already sorted by depth from _prepare_sandbox_config
-        for src, dst, ro, is_primary in final_binds:
+        for src, dst, ro, _is_primary in final_binds:
             try:
                 # Create the destination path inside the playground so bwrap can mount on top of it.
                 # (--bind-try only skips a missing SOURCE; missing DESTINATION still errors.)
@@ -472,8 +458,8 @@ class BwrapSandbox(OdevFrameworkMixin):
                         dst_in_playground.mkdir(parents=True, exist_ok=True)
                     else:
                         dst_in_playground.parent.mkdir(parents=True, exist_ok=True)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"Could not pre-create destination path for {dst}: {e}")
             cmd.extend(["--ro-bind-try" if ro else "--bind-try", str(src), str(dst)])
 
         # This fixes 'gitdir' issues where Git metadata stores absolute host paths

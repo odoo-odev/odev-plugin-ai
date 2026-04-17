@@ -36,12 +36,13 @@ class PostgresSandbox(OdevFrameworkMixin):
         if ephemeral:
             pg_process = self._start_ephemeral_postgres(proxy_dir, pg_data_dir)
             if pg_process:
-                user = Path.home().name
-                if database:
-                    self._create_database(proxy_dir, user, database)
-
                 if database and host_socket_dir and host_socket_dir.exists():
-                    self._clone_host_database(database, host_socket_dir, proxy_dir)
+                    cloned = self._clone_host_database(database, host_socket_dir, proxy_dir)
+                    if not cloned:
+                        logger.info(
+                            f"Host database {database!r} not found or could not be cloned; "
+                            "the AI agent will initialize it as needed."
+                        )
 
                 cmd.extend(
                     [
@@ -58,35 +59,33 @@ class PostgresSandbox(OdevFrameworkMixin):
         return None
 
     def _clone_host_database(self, database: str, host_socket_dir: Path, ephemeral_socket_dir: Path) -> bool:
-        """Clone host database data into the ephemeral cluster's existing database."""
-        logger.info(f"Cloning host database data for {database!r} into ephemeral cluster...")
-        user = Path.home().name
-        try:
-            # We assume the database has already been created in the caller
-            dump_cmd = [
-                "pg_dump",
-                "-h",
-                str(host_socket_dir),
-                "-d",
-                database,
-                "--no-owner",
-                "--no-privileges",
-            ]
-            restore_cmd = [
-                "psql",
-                "-h",
-                str(ephemeral_socket_dir),
-                "-p",
-                "5432",
-                "-U",
-                user,
-                "-d",
-                database,
-            ]
+        """Clone a host database into the ephemeral cluster.
 
-            p1 = subprocess.Popen(dump_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        Uses odev's LocalDatabase to verify the source exists and is an Odoo
+        database before cloning. If not, the cluster is left empty so the AI
+        agent can initialize the database itself via its Odoo skill.
+        """
+        from odev.common.databases.local import LocalDatabase
+
+        db = LocalDatabase(database)
+        if not db.exists:
+            logger.debug(f"Host database {database!r} does not exist, skipping clone.")
+            return False
+        if not db.is_odoo:
+            logger.debug(f"Host database {database!r} is not an Odoo database, skipping clone.")
+            return False
+
+        user = Path.home().name
+        logger.info(f"Cloning host database {database!r} into ephemeral cluster...")
+        self._create_database(ephemeral_socket_dir, user, database)
+        try:
+            p1 = subprocess.Popen(
+                ["pg_dump", "-h", str(host_socket_dir), "-d", database, "--no-owner", "--no-privileges"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
             p2 = subprocess.Popen(
-                restore_cmd,
+                ["psql", "-h", str(ephemeral_socket_dir), "-p", "5432", "-U", user, "-d", database],
                 stdin=p1.stdout,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.PIPE,
@@ -95,14 +94,14 @@ class PostgresSandbox(OdevFrameworkMixin):
             _, stderr = p2.communicate()
 
             if p2.returncode != 0:
-                logger.warning(f"Failed to clone data for {database!r} (it might not exist on host): {stderr.decode()}")
+                logger.warning(f"Failed to restore {database!r} into ephemeral cluster: {stderr.decode().strip()}")
                 return False
-            else:
-                logger.info(f"Database {database!r} data successfully cloned.")
-                return True
+
+            logger.info(f"Database {database!r} successfully cloned.")
+            return True
 
         except Exception as e:
-            logger.debug(f"Failed to clone host database data: {e}")
+            logger.debug(f"Failed to clone host database {database!r}: {e}")
             return False
 
     def _create_database(self, socket_dir: Path, user: str, database: str) -> bool:
@@ -127,7 +126,7 @@ class PostgresSandbox(OdevFrameworkMixin):
             )
             return True
         except Exception as e:
-            logger.debug(f"Database {database!r} creation failed/skipped: {e}")
+            logger.warning(f"Database {database!r} creation failed: {e}")
             return False
 
     def _start_ephemeral_postgres(self, socket_dir: Path, data_dir: Path) -> subprocess.Popen | None:
