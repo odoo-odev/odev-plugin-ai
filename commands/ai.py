@@ -32,7 +32,7 @@ class AICommand(DatabaseCommand, AICommandMixin):
 
     dirs = args.List(
         aliases=["-d", "--dirs"],
-        description="Comma-separated list of directories to include in the sandbox (read-write). Defaults to the current directory.",
+        description="Comma-separated list of directories to include in the sandbox (read-write). Defaults to the current directory.",  # noqa: B950
         default=[Path(".").resolve()],
     )
 
