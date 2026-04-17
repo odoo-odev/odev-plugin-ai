@@ -216,7 +216,7 @@ class BwrapSandbox(OdevFrameworkMixin):
                     # Type A — infrastructure odev (parents montent les enfants, pas de dedup)
                     bind(self.odev.path),
                     bind(self.odev.home_path / "plugins"),
-                    bind(self.odev.home_path / "worktrees", "/worktrees"),
+                    bind(self.odev.home_path / "worktrees", "/worktrees", ro=False),
                     bind(self.odev.home_path / "virtualenvs", ro=False),
                     *[bind(r.path) for r in odoo_repositories(enterprise=True)],
                 ],
@@ -340,7 +340,9 @@ class BwrapSandbox(OdevFrameworkMixin):
         configs = {
             "gemini": [".gemini", ".config/gemini"],
             "claude": [".claude", ".config/claude"],
-            "copilot": [".config/github-copilot"],
+            # copilot checks ~/.copilot/config.json for logged-in state,
+            # ~/.config/gh/ for the GitHub account, and uses GITHUB_TOKEN for the actual token
+            "copilot": [".copilot", ".config/github-copilot", ".config/gh"],
         }
 
         relevant_dirs = configs.get(self.cli, [])
@@ -353,24 +355,40 @@ class BwrapSandbox(OdevFrameworkMixin):
                 "google_accounts.json",
                 "claude-credentials.json",
                 "hosts.json",
+                "hosts.yml",
+                "config.yml",
             ]
+            # Claude Code uses .credentials.json (OAuth token) and settings.json
+            # (theme, preferences) — neither matches the generic list above
+            if self.cli in ("claude", "opencode-cli"):
+                creds_files += [".credentials.json", "settings.json"]
+            # Copilot's config.json lists logged_in_users which makes it go to the keyring
+            # before checking env vars. Without it, COPILOT_GITHUB_TOKEN env var takes effect.
+            if self.cli != "copilot":
+                creds_files.append("config.json")
             for cf in creds_files:
                 hcf = host_home / rel_dir / cf
                 if hcf.exists():
                     shutil.copy2(hcf, target_dir / cf)
 
-            trusted_paths = [
-                "/knowledge",
-                "/custom",
-                "/worktree",
-                "/venvs",
-                "/repositories",
-                "/upgrade",
-                "/dumps",
-            ]
-            for d in all_candidate_paths:
-                if ":" in d:
-                    trusted_paths.append(d.split(":")[1])
+        # Claude Code stores onboarding state, theme, and startup count in ~/.claude.json
+        # (directly in $HOME, not inside ~/.claude/). Without it the theme picker appears.
+        if self.cli in ("claude", "opencode-cli"):
+            dot_claude_json = host_home / ".claude.json"
+            if dot_claude_json.exists():
+                shutil.copy2(dot_claude_json, playground / ".claude.json")
+
+        trusted_paths = [
+            "/knowledge",
+            "/custom",
+            "/worktree",
+            "/venvs",
+            "/repositories",
+            "/upgrade",
+        ]
+        for d in all_candidate_paths:
+            if ":" in d:
+                trusted_paths.append(d.split(":")[1])
 
         # Inject skills into the CLI's native context
         if primary := skill_targets.get(self.cli):

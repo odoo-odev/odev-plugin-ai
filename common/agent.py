@@ -39,11 +39,8 @@ class AgentCLI(BwrapSandbox):
         cmd.append("yolo" if self.yolo else "auto_edit")
         if self.model and self.model != "auto":
             cmd.extend(["-m", self.model])
-        # Use specific guest paths for indexing
-        indexing_whitelist = ["/knowledge", "/custom", "/worktrees", str(host_home / ".odev")]
         for path in self._guest_paths(all_candidate_paths):
-            if any(path.startswith(w) for w in indexing_whitelist):
-                cmd.extend(["--include-directories", path])
+            cmd.extend(["--include-directories", path])
         return cmd
 
     def _get_copilot_agent_cmd(
@@ -58,16 +55,19 @@ class AgentCLI(BwrapSandbox):
             cmd.extend(["-p" if self.headless else "-i", prompt])
         if resume:
             cmd.append(f"--resume={resume}")
-        cmd.extend(
-            [
-                "--allow-tool=read",
-                "--allow-tool=write",
-                "--allow-tool=shell(rtk:*)",
-                "--allow-tool=shell(odev:*)",
-                "--allow-tool=shell(git:*)",
-                "--allow-tool=shell(pre-commit:*)",
-            ]
-        )
+        if self.yolo:
+            cmd.append("--yolo")
+        else:
+            cmd.extend(
+                [
+                    "--allow-tool=read",
+                    "--allow-tool=write",
+                    "--allow-tool=shell(rtk:*)",
+                    "--allow-tool=shell(odev:*)",
+                    "--allow-tool=shell(git:*)",
+                    "--allow-tool=shell(pre-commit:*)",
+                ]
+            )
         if self.model and self.model != "auto":
             cmd.extend(["-m", self.model])
         for path in self._guest_paths(all_candidate_paths):
@@ -112,16 +112,19 @@ class AgentCLI(BwrapSandbox):
                 cmd.append(prompt)
         if resume:
             cmd.extend(["--session-id", resume])
-        cmd.extend(
-            [
-                "--permission-mode",
-                "acceptEdits",
-                "--allowedTools",
-                "Bash(rtk:*),Bash(odev:*),Bash(git:*),Bash(pre-commit:*),Read,Edit",
-            ]
-        )
+        if self.yolo:
+            cmd.append("--dangerously-skip-permissions")
+        else:
+            cmd.extend(
+                [
+                    "--permission-mode",
+                    "acceptEdits",
+                    "--allowedTools",
+                    "Bash(rtk:*),Bash(odev:*),Bash(git:*),Bash(pre-commit:*),Read,Edit",
+                ]
+            )
         if self.model and self.model != "auto":
-            cmd.extend(["-m", self.model])
+            cmd.extend(["--model", self.model])
         for path in self._guest_paths(all_candidate_paths):
             cmd.extend(["--add-dir", path])
         return cmd
@@ -397,6 +400,12 @@ class AgentCLI(BwrapSandbox):
             except Exception:
                 pass
 
+        # Copilot checks env vars in order: COPILOT_GITHUB_TOKEN > GH_TOKEN > GITHUB_TOKEN.
+        # The keyring stores the same gho_ OAuth token that gh uses, so we alias it to
+        # COPILOT_GITHUB_TOKEN (highest precedence) so copilot uses it without keyring access.
+        if self.cli == "copilot" and "GITHUB_TOKEN" in found_secrets:
+            found_secrets.setdefault("COPILOT_GITHUB_TOKEN", found_secrets["GITHUB_TOKEN"])
+
         from odev.common.store.datastore import DataStore
 
         ds = DataStore().secrets
@@ -406,11 +415,14 @@ class AgentCLI(BwrapSandbox):
                 continue
 
             try:
-                is_opt = self.cli == "copilot" and key in [
-                    "GH_TOKEN",
-                    "OPENAI_API_KEY",
-                    "ANTHROPIC_API_KEY",
-                ]
+                is_opt = key in (
+                    ["GH_TOKEN", "OPENAI_API_KEY", "ANTHROPIC_API_KEY"]
+                    if self.cli == "copilot"
+                    # Claude Code authenticates via OAuth (hosts.json), API key is optional
+                    else ["ANTHROPIC_API_KEY", "GH_TOKEN"]
+                    if self.cli == "claude"
+                    else []
+                )
                 # If headless, we NEVER prompt. We fail later if required.
                 ask = not is_opt and not self.headless
 

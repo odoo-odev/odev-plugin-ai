@@ -56,9 +56,24 @@ class AICommand(DatabaseCommand, AICommandMixin):
             prompt_parts.insert(0, database_name)
             database_name = None
 
+        # Build path_mapping from -d entries with host:guest format so the guest path
+        # gets added to the agent's trusted workspace (same as --add-dir in upgrade command)
+        path_mapping: dict[str, str] = {}
+        sandbox_dirs: list[str] = []
+        for d in self.args.dirs:
+            d = str(d)
+            if ":" in d:
+                host, guest = d.split(":", 1)
+                host = str(Path(host).resolve())
+                sandbox_dirs.append(f"{host}:{guest}")
+                path_mapping[host] = guest
+            else:
+                sandbox_dirs.append(str(Path(d).resolve()))
+
         self.get_ai_agent().run(
             prompt=" ".join(prompt_parts),
-            sandbox_dirs=[str(Path(d).resolve()) for d in self.args.dirs],
+            sandbox_dirs=sandbox_dirs,
             database=database_name,
             resume=self.args.resume,
+            path_mapping=path_mapping or None,
         )
