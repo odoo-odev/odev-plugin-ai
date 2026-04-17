@@ -4,7 +4,6 @@ from pathlib import Path
 
 from odev.common import args
 from odev.common.commands import DatabaseCommand
-from odev.common.errors.commands import CommandError
 from odev.common.logging import logging
 
 from odev.plugins.odev_plugin_ai.common.mixins import AICommandMixin
@@ -39,7 +38,10 @@ class AICommand(DatabaseCommand, AICommandMixin):
     def infer_database_instance(self):
         try:
             return super().infer_database_instance()
-        except CommandError:
+        except Exception:
+            # The first positional arg may be the start of the prompt (not a real database name).
+            # Catching broadly here prevents SQL syntax errors when the "name" contains characters
+            # like apostrophes (e.g. French text) that break raw-string SQL in database_exists().
             from odev.common.databases import DummyDatabase
 
             return DummyDatabase()
