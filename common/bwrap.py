@@ -187,6 +187,17 @@ class BwrapSandbox(OdevFrameworkMixin):
         if rtk_config.exists():
             cmd.extend(["--bind", str(rtk_config), str(host_home / ".config" / "rtk")])
 
+    def _resolve_sandbox_dirs(self, sandbox_dirs: list[str]) -> list[tuple[Path, Path]]:
+        """Parse sandbox_dirs entries into (host, guest) pairs."""
+        result = []
+        for s in sandbox_dirs:
+            if ":" in s:
+                host, guest = s.split(":", 1)
+            else:
+                host, guest = s, "/custom"
+            result.append((Path(host).resolve(), Path(guest)))
+        return result
+
     def _prepare_sandbox_config(
         self,
         sandbox_dirs: list[str],
@@ -202,15 +213,14 @@ class BwrapSandbox(OdevFrameworkMixin):
                 return None
             return (p, Path(dst) if dst else p, ro, primary)
 
+        effective_sandbox_binds = self._resolve_sandbox_dirs(sandbox_dirs)
+
         binds = list(
             filter(
                 None,
                 [
                     # Type B — user workspace (primary, RW)
-                    *[
-                        bind(s.split(":", 1)[0], s.split(":", 1)[1] if ":" in s else "/custom", ro=False, primary=True)
-                        for s in sandbox_dirs
-                    ],
+                    *[bind(host, guest, ro=False, primary=True) for host, guest in effective_sandbox_binds],
                     # Type B — extra dirs provided by the caller (RO)
                     *[bind(e.split(":", 1)[0], e.split(":", 1)[1] if ":" in e else e) for e in (extra_bind_dirs or [])],
                     # Type A — odev infrastructure (parents are mounted before children, no dedup)
@@ -245,8 +255,33 @@ class BwrapSandbox(OdevFrameworkMixin):
 
         return None
 
+    def _setup_chrome_wrapper(self, cmd, sandbox_tmp):
+        """Create a Chrome wrapper script in /tmp that injects rendering-consistency
+        flags, then point ODOO_BROWSER_BIN at it so Odoo picks it up."""
+        wrapper = sandbox_tmp / "odoo-chrome-wrapper"
+        wrapper.write_text(
+            "#!/bin/bash\n"
+            "for bin in google-chrome chromium chromium-browser google-chrome-stable; do\n"
+            '    real=$(command -v "$bin" 2>/dev/null)\n'
+            '    if [ -n "$real" ]; then\n'
+            '        exec "$real" \\\n'
+            "            --font-render-hinting=none \\\n"
+            "            --force-device-scale-factor=1 \\\n"
+            "            --disable-font-subpixel-positioning \\\n"
+            "            --hide-scrollbars \\\n"
+            "            --window-size=1366,768 \\\n"
+            '            "$@"\n'
+            "    fi\n"
+            "done\n"
+            'echo "Chrome not found" >&2\n'
+            "exit 1\n"
+        )
+        wrapper.chmod(0o755)
+        cmd.extend(["--setenv", "ODOO_BROWSER_BIN", "/tmp/odoo-chrome-wrapper"])
+
     def _add_system_binds(self, cmd, host_home, sandbox_tmp, cwd):
         """Add standard system and network-related binds to the command."""
+        self._setup_chrome_wrapper(cmd, sandbox_tmp)
         cmd.extend(
             [
                 "--ro-bind",
@@ -295,6 +330,12 @@ class BwrapSandbox(OdevFrameworkMixin):
                 "--ro-bind-try",
                 "/etc/machine-id",
                 "/etc/machine-id",
+                "--ro-bind-try",
+                "/etc/ld.so.cache",
+                "/etc/ld.so.cache",
+                "--ro-bind-try",
+                "/etc/mime.types",
+                "/etc/mime.types",
                 "--ro-bind-try",
                 str(host_home / ".npm-global"),
                 str(host_home / ".npm-global"),
@@ -551,10 +592,6 @@ class BwrapSandbox(OdevFrameworkMixin):
                 # followed by the quoted options/command.
                 full_cmd = f"bwrap --args 3 {cmd_str} 3<{shlex.quote(f.name)}"
                 logger.debug(f"Running sandbox command: {full_cmd}")
-
-                # Push content to scrollback to prevent loss if TUI clears screen
-                if not self.headless:
-                    console.print("\n" * 20)
 
                 # Use bash.run to grant the command raw TTY access, supporting TUIs natively.
                 bash.run(full_cmd)
