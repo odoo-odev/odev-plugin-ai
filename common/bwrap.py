@@ -383,8 +383,11 @@ class BwrapSandbox(OdevFrameworkMixin):
                 skills_dir = Path(plugin.path) / "skills"
                 if not skills_dir.is_dir():
                     continue
+                disabled_skills = self.odev.config.skills.disabled
                 for skill_pkg in skills_dir.iterdir():
                     if not skill_pkg.is_dir() or not (skill_pkg / "SKILL.md").exists():
+                        continue
+                    if skill_pkg.name in disabled_skills:
                         continue
                     skills_dest.mkdir(exist_ok=True)
                     if self.cli == "gemini":
