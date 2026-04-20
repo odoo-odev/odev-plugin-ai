@@ -394,15 +394,15 @@ class BwrapSandbox(OdevFrameworkMixin):
             creds_files = [
                 "gemini-credentials.json",
                 "google_accounts.json",
+                "oauth_creds.json",
                 "claude-credentials.json",
+                ".credentials.json",
                 "hosts.json",
                 "hosts.yml",
                 "config.yml",
+                "settings.json",
+                "policy-limits.json",
             ]
-            # Claude Code uses .credentials.json (OAuth token) and settings.json
-            # (theme, preferences) — neither matches the generic list above
-            if self.cli in ("claude", "opencode-cli"):
-                creds_files += [".credentials.json", "settings.json"]
             # Copilot's config.json lists logged_in_users which makes it go to the keyring
             # before checking env vars. Without it, COPILOT_GITHUB_TOKEN env var takes effect.
             if self.cli != "copilot":
@@ -412,12 +412,16 @@ class BwrapSandbox(OdevFrameworkMixin):
                 if hcf.exists():
                     shutil.copy2(hcf, target_dir / cf)
 
-        # Claude Code stores onboarding state, theme, and startup count in ~/.claude.json
-        # (directly in $HOME, not inside ~/.claude/). Without it the theme picker appears.
-        if self.cli in ("claude", "opencode-cli"):
-            dot_claude_json = host_home / ".claude.json"
-            if dot_claude_json.exists():
-                shutil.copy2(dot_claude_json, playground / ".claude.json")
+        # Copy global CLI config file (e.g. ~/.claude.json) — contains hasCompletedOnboarding,
+        # oauthAccount, userID, etc. Without it Claude shows the first-run wizard every time.
+        global_config_names = {
+            "claude": ".claude.json",
+            "opencode-cli": ".claude.json",
+        }
+        if gcn := global_config_names.get(self.cli):
+            src = host_home / gcn
+            if src.exists():
+                shutil.copy2(src, playground / gcn)
 
         trusted_paths = [
             "/knowledge",
@@ -476,7 +480,6 @@ class BwrapSandbox(OdevFrameworkMixin):
                     "projects.json": {"projects": {}},
                     "state.json": {},
                     "sessions.json": {"sessions": []},
-                    "config.json": {},
                 }
                 for junk, structure in structures.items():
                     junk_file = target_dir / junk
