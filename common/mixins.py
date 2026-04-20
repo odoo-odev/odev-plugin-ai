@@ -63,6 +63,12 @@ class AICommandMixin:
         default=None,
     )
 
+    dirs = args.List(
+        aliases=["-d", "--dirs"],
+        description="Comma-separated list of extra directories to include in the sandbox (read-only).",
+        default=[],
+    )
+
     def get_ai_agent(self) -> AgentCLI:
         """Initialize and return an AgentCLI instance based on command arguments.
 
@@ -164,15 +170,10 @@ class AICommandMixin:
         """Helper to run the AI agent with common Odoo-related sandbox paths."""
         agent = self.get_ai_agent()
 
-        paths = set()
-        if hasattr(self, "odoobin") and self.odoobin:
-            paths.update([p.as_posix() for p in self.odoobin.addons_paths if p.exists()])
-
-        paths.add(Path.cwd().as_posix())
-
         return agent.run(
             prompt,
-            sandbox_dirs=list(paths),
+            sandbox_dirs=[Path.cwd().as_posix()],
+            extra_bind_dirs=[str(d) for d in self.args.dirs] or None,
             database=database,
             resume=self.args.resume,
             ephemeral_pg=ephemeral_pg,
