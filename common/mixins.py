@@ -78,6 +78,9 @@ class AICommandMixin:
         chosen_cli = self.args.cli
         favorite_cli = self.config.ai.favorite_cli
 
+        if self.args.headless:
+            self.console.bypass_prompt = True
+
         if not favorite_cli:
             available = [c for c in all_clis if shutil.which(c)]
             if not available:
@@ -88,14 +91,17 @@ class AICommandMixin:
                 self.config.ai.favorite_cli = favorite_cli
                 logger.info(f"Setting your only detected AI CLI '{favorite_cli}' as favorite.")
             else:
-                favorite_cli = self.console.select(
-                    "Which AI CLI tool do you want to use as your favorite?",
-                    choices=[(c, c) for c in available],
-                )
+                if self.args.headless:
+                    favorite_cli = available[0]
+                else:
+                    favorite_cli = self.console.select(
+                        "Which AI CLI tool do you want to use as your favorite?",
+                        choices=[(c, c) for c in available],
+                    )
                 self.config.ai.favorite_cli = favorite_cli
                 logger.info(f"Setting '{favorite_cli}' as your favorite AI CLI.")
 
-        if chosen_cli and favorite_cli and chosen_cli != favorite_cli:
+        if chosen_cli and favorite_cli and chosen_cli != favorite_cli and not self.args.headless:
             if self.console.confirm(
                 f"Do you want to set '{chosen_cli}' as your new favorite AI CLI?",
                 default=False,
@@ -109,19 +115,22 @@ class AICommandMixin:
         favorite_model = self.config.ai.get_favorite_model(final_cli)
 
         if not chosen_model and not favorite_model:
-            choices = [("auto", "auto"), ("other", "Other (type it manually)")]
+            if self.args.headless:
+                favorite_model = "auto"
+            else:
+                choices = [("auto", "auto"), ("other", "Other (type it manually)")]
 
-            favorite_model = self.console.select(
-                f"Which model do you want to use for '{final_cli}' as your favorite?",
-                choices=choices,
-            )
-            if favorite_model == "other":
-                favorite_model = self.console.input("Please enter the model name:")
+                favorite_model = self.console.select(
+                    f"Which model do you want to use for '{final_cli}' as your favorite?",
+                    choices=choices,
+                )
+                if favorite_model == "other":
+                    favorite_model = self.console.input("Please enter the model name:")
 
             self.config.ai.set_favorite_model(final_cli, favorite_model)
             logger.info(f"Setting '{favorite_model}' as your favorite model for {final_cli}.")
 
-        if chosen_model and favorite_model and chosen_model != favorite_model:
+        if chosen_model and favorite_model and chosen_model != favorite_model and not self.args.headless:
             if self.console.confirm(
                 f"Do you want to set '{chosen_model}' as your new favorite model for {final_cli}?",
                 default=False,

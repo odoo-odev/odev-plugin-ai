@@ -356,15 +356,14 @@ class AgentCLI(BwrapSandbox):
     def _collect_secrets(self) -> list[tuple[str, str]]:  # noqa: C901
         """Retrieve and interactively prompt for AI API secrets."""
         relevant = {
-            "claude": ["ANTHROPIC_API_KEY", "GITHUB_TOKEN", "GH_TOKEN"],
-            "gemini": ["GOOGLE_API_KEY", "GEMINI_API_KEY", "GITHUB_TOKEN", "GH_TOKEN"],
+            "claude": ["ANTHROPIC_API_KEY", "GITHUB_TOKEN"],
+            "gemini": ["GEMINI_API_KEY", "GITHUB_TOKEN"],
             "copilot": [
                 "GITHUB_TOKEN",
-                "GH_TOKEN",
                 "OPENAI_API_KEY",
                 "ANTHROPIC_API_KEY",
             ],
-            "openai": ["OPENAI_API_KEY", "GITHUB_TOKEN", "GH_TOKEN"],
+            "openai": ["OPENAI_API_KEY", "GITHUB_TOKEN"],
         }
         to_process = relevant.get(self.cli, [])
         found_secrets: dict[str, str] = {}
@@ -438,14 +437,10 @@ class AgentCLI(BwrapSandbox):
             except Exception as e:
                 logger.debug(f"Could not retrieve secret {key!r}: {e}")
 
-        if "GOOGLE_API_KEY" in found_secrets and "GEMINI_API_KEY" not in found_secrets:
-            found_secrets["GEMINI_API_KEY"] = found_secrets.pop("GOOGLE_API_KEY")
-        elif "GEMINI_API_KEY" in found_secrets:
-            found_secrets.pop("GOOGLE_API_KEY", None)
-
+        # Mirror canonical keys to their common aliases for underlying tool compatibility
         if "GITHUB_TOKEN" in found_secrets:
-            found_secrets.setdefault("GH_TOKEN", found_secrets["GITHUB_TOKEN"])
-        elif "GH_TOKEN" in found_secrets:
-            found_secrets["GITHUB_TOKEN"] = found_secrets["GH_TOKEN"]
+            found_secrets["GH_TOKEN"] = found_secrets["GITHUB_TOKEN"]
+        if "GEMINI_API_KEY" in found_secrets:
+            found_secrets["GOOGLE_API_KEY"] = found_secrets["GEMINI_API_KEY"]
 
         return list(found_secrets.items())
