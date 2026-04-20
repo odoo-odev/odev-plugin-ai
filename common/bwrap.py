@@ -386,10 +386,17 @@ class BwrapSandbox(OdevFrameworkMixin):
             "copilot": [".copilot", ".config/github-copilot", ".config/gh"],
         }
 
+        persistent_dirs = [".claude", ".gemini", ".opencode", ".claude.json"]
+
         relevant_dirs = configs.get(self.cli, [])
         for rel_dir in relevant_dirs:
-            target_dir = playground / rel_dir
-            target_dir.mkdir(parents=True, exist_ok=True)
+            # If the directory is bind-mounted (persistent), we work directly on the host path
+            # for ephemeral config like trustedFolders.json, otherwise we use the playground.
+            is_persistent = rel_dir in persistent_dirs
+            target_dir = (host_home / rel_dir) if is_persistent else (playground / rel_dir)
+
+            if not is_persistent:
+                target_dir.mkdir(parents=True, exist_ok=True)
 
             creds_files = [
                 "gemini-credentials.json",
@@ -407,10 +414,11 @@ class BwrapSandbox(OdevFrameworkMixin):
             # before checking env vars. Without it, COPILOT_GITHUB_TOKEN env var takes effect.
             if self.cli != "copilot":
                 creds_files.append("config.json")
-            for cf in creds_files:
-                hcf = host_home / rel_dir / cf
-                if hcf.exists():
-                    shutil.copy2(hcf, target_dir / cf)
+            if not is_persistent:
+                for cf in creds_files:
+                    hcf = host_home / rel_dir / cf
+                    if hcf.exists():
+                        shutil.copy2(hcf, target_dir / cf)
 
         # Copy global CLI config file (e.g. ~/.claude.json) — contains hasCompletedOnboarding,
         # oauthAccount, userID, etc. Without it Claude shows the first-run wizard every time.
@@ -419,9 +427,12 @@ class BwrapSandbox(OdevFrameworkMixin):
             "opencode-cli": ".claude.json",
         }
         if gcn := global_config_names.get(self.cli):
-            src = host_home / gcn
-            if src.exists():
-                shutil.copy2(src, playground / gcn)
+            # Skip if it's already covered by a bind-mounted directory
+            is_covered = any(gcn == pd or gcn.startswith(pd + "/") for pd in persistent_dirs)
+            if not is_covered:
+                src = host_home / gcn
+                if src.exists():
+                    shutil.copy2(src, playground / gcn)
 
         trusted_paths = [
             "/knowledge",
@@ -438,8 +449,10 @@ class BwrapSandbox(OdevFrameworkMixin):
         # Inject skills into the CLI's native context
         if primary := skill_targets.get(self.cli):
             rel_dir, md_filename = primary
-            target_dir = playground / rel_dir
-            target_dir.mkdir(parents=True, exist_ok=True)
+            is_persistent = rel_dir in persistent_dirs
+            target_dir = (host_home / rel_dir) if is_persistent else (playground / rel_dir)
+            if not is_persistent:
+                target_dir.mkdir(parents=True, exist_ok=True)
             skills_dest = target_dir / "skills"
             skill_refs = []
             for plugin in self.odev.plugins:
@@ -483,10 +496,9 @@ class BwrapSandbox(OdevFrameworkMixin):
                 }
                 for junk, structure in structures.items():
                     junk_file = target_dir / junk
-                    if junk_file.exists():
-                        junk_file.unlink()
-                    # Pre-emptively create minimal valid ones
-                    junk_file.write_text(json.dumps(structure))
+                    if not junk_file.exists():
+                        # Pre-emptively create minimal valid ones if they don't exist
+                        junk_file.write_text(json.dumps(structure))
 
             except Exception as e:
                 logger.debug(f"Failed to write sanitized agent config: {e}")

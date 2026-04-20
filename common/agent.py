@@ -143,9 +143,13 @@ class AgentCLI(BwrapSandbox):
         agent_dirs = [
             host_home / ".cache",
             host_home / ".local",
+            host_home / ".claude",
+            host_home / ".gemini",
+            host_home / ".opencode",
         ]
         agent_files = [
             host_home / ".gitconfig",
+            host_home / ".claude.json",
         ]
         # Include .env if it exists in the current directory
         env_file = Path.cwd() / ".env"
