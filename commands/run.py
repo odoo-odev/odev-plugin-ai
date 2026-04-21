@@ -39,7 +39,7 @@ class RunCommand(BaseRunCommand, AICommandMixin):
     def _ensure_stop_after_init(self):
         """Inject --stop-after-init into odoo_args if not already present."""
         odoo_args = list(self.args.odoo_args or [])
-        if "--stop-after-init" not in odoo_args:
+        if "--stop-after-init" not in odoo_args and "--st" not in odoo_args:
             self.args.odoo_args = odoo_args + ["--stop-after-init"]
 
     def _has_installation_errors(self) -> bool:
@@ -48,11 +48,9 @@ class RunCommand(BaseRunCommand, AICommandMixin):
 
     def _build_cmd_to_run(self) -> str:
         """Build the odev run command string for use in AI prompts."""
-        argv = [a for a in self._argv if a not in ("--ai",)]
-        cmd = f"odev run {' '.join(argv)}"
-        if "--stop-after-init" not in cmd:
-            cmd += " --stop-after-init"
-        return cmd
+        self._ensure_stop_after_init()
+        argv = [a for a in self._argv if a not in ("--ai", "--stop-after-init", "--st")]
+        return f"odev run {' '.join(argv)} --stop-after-init"
 
     def run(self):
         if not self.args.ai:
@@ -86,9 +84,6 @@ class RunCommand(BaseRunCommand, AICommandMixin):
                 return
         except CommandError:
             logger.warning("Odoo failed. Capturing logs and launching AI agent...")
-        except Exception as e:
-            logger.error(f"Unexpected error during Odoo execution: {e}")
-            raise
 
         cmd_to_run = self._build_cmd_to_run()
         log_file = Path(".odev-run-failures.log").resolve()
@@ -141,9 +136,6 @@ class RunCommand(BaseRunCommand, AICommandMixin):
                     return
             except CommandError:
                 logger.warning(f"Attempt {iteration} failed. Extracting errors for AI agent...")
-            except Exception as e:
-                logger.error(f"Unexpected error during Odoo execution: {e}")
-                raise
 
             log_file = Path(".odev-run-errors.log").resolve()
             log_file.write_text("\n".join(self.run_buffer))

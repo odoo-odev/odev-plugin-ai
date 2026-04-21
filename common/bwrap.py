@@ -50,8 +50,9 @@ class BwrapSandbox(OdevFrameworkMixin):
         from odev.common import string
 
         console.rule(string.stylize("AI SANDBOX SECURITY WARNING", "bold color.red"), style="color.red")
+
         console.print(
-            f"\n{string.stylize('ATTENTION:', 'bold color.yellow')} You are running an AI agent in a sandboxed environment."
+            f"\n{string.stylize('WARNING:', 'bold color.yellow')} You are running an AI agent in a sandboxed environment."
         )
         console.print("The agent can read/write files and access the database within this sandbox.")
 
@@ -150,6 +151,7 @@ class BwrapSandbox(OdevFrameworkMixin):
                     # Type A — odev infrastructure (parents are mounted before children, no dedup)
                     bind(self.odev.path),
                     bind(self.odev.home_path / "plugins"),
+                    # RW access is required for odev to perform git operations/worktree management
                     bind(self.odev.home_path / "worktrees", ro=False),
                     bind(self.odev.home_path / "virtualenvs", ro=False),
                     *[bind(r.path, ro=False) for r in odoo_repositories(enterprise=True)],
