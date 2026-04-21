@@ -243,12 +243,28 @@ class AICommandMixin:
                     return [str(p.resolve()) for p in addons_paths]
 
         target_dir = (cwd or Path.cwd()).resolve()
-        # If we are in the home directory, we don't want to launch the AI agent there.
-        # Instead, we use a playground directory inside the odev home.
-        if target_dir == Path.home().resolve():
-            playground = self.odev.home_path / "playground"
-            playground.mkdir(parents=True, exist_ok=True)
-            return [str(playground)]
+        home = Path.home().resolve()
+
+        # If we are in the home directory or a non-git subdirectory,
+        # use a playground to avoid exposing sensitive folders (Downloads, Documents, etc.)
+        if target_dir.as_posix().startswith(home.as_posix()):
+            # Check if we are inside a git repository
+            is_git = False
+            try:
+                curr = target_dir
+                while curr != curr.parent and curr.as_posix().startswith(home.as_posix()):
+                    if (curr / ".git").exists():
+                        is_git = True
+                        break
+                    curr = curr.parent
+            except Exception:
+                pass
+
+            if not is_git:
+                playground = self.odev.home_path / "playground"
+                playground.mkdir(parents=True, exist_ok=True)
+                logger.info(f"Using AI playground sandbox: {playground}")
+                return [str(playground)]
 
         return [str(target_dir)]
 
