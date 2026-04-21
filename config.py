@@ -29,3 +29,16 @@ class AiSection(Section):
     def set_favorite_model(self, cli: str, model: str):
         """Set the favorite model specifically for the given CLI agent."""
         self.set(f"favorite_model_{cli}", model)
+
+
+class SkillsSection(Section):
+    _name = "skills"
+
+    @property
+    def disabled(self) -> list[str]:
+        """List of disabled skills."""
+        return [s for s in self.get("disabled", "").split(",") if s]
+
+    @disabled.setter
+    def disabled(self, value: list[str]):
+        self.set("disabled", ",".join(value))

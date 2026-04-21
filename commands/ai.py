@@ -29,12 +29,6 @@ class AICommand(DatabaseCommand, AICommandMixin):
         nargs="*",
     )
 
-    dirs = args.List(
-        aliases=["-d", "--dirs"],
-        description="Comma-separated list of directories to include in the sandbox (read-write). Defaults to the current directory.",  # noqa: B950
-        default=[Path(".").resolve()],
-    )
-
     def infer_database_instance(self):
         try:
             return super().infer_database_instance()
@@ -56,9 +50,13 @@ class AICommand(DatabaseCommand, AICommandMixin):
             prompt_parts.insert(0, database_name)
             database_name = None
 
+        if database_name:
+            self._ensure_database_safety(database_name)
+
         self.get_ai_agent().run(
             prompt=" ".join(prompt_parts),
-            sandbox_dirs=[str(Path(d).resolve()) for d in self.args.dirs],
+            sandbox_dirs=[str(Path(".").resolve())],
+            extra_bind_dirs=[str(d) for d in self.args.dirs] or None,
             database=database_name,
             resume=self.args.resume,
         )

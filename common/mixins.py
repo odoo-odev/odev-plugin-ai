@@ -63,6 +63,12 @@ class AICommandMixin:
         default=None,
     )
 
+    dirs = args.List(
+        aliases=["-d", "--dirs"],
+        description="Comma-separated list of extra directories to include in the sandbox (read-only).",
+        default=[],
+    )
+
     def get_ai_agent(self) -> AgentCLI:
         """Initialize and return an AgentCLI instance based on command arguments.
 
@@ -71,6 +77,9 @@ class AICommandMixin:
         all_clis = ["claude", "gemini", "copilot", "opencode-cli"]
         chosen_cli = self.args.cli
         favorite_cli = self.config.ai.favorite_cli
+
+        if self.args.headless:
+            self.console.bypass_prompt = True
 
         if not favorite_cli:
             available = [c for c in all_clis if shutil.which(c)]
@@ -82,14 +91,17 @@ class AICommandMixin:
                 self.config.ai.favorite_cli = favorite_cli
                 logger.info(f"Setting your only detected AI CLI '{favorite_cli}' as favorite.")
             else:
-                favorite_cli = self.console.select(
-                    "Which AI CLI tool do you want to use as your favorite?",
-                    choices=[(c, c) for c in available],
-                )
+                if self.args.headless:
+                    favorite_cli = available[0]
+                else:
+                    favorite_cli = self.console.select(
+                        "Which AI CLI tool do you want to use as your favorite?",
+                        choices=[(c, c) for c in available],
+                    )
                 self.config.ai.favorite_cli = favorite_cli
                 logger.info(f"Setting '{favorite_cli}' as your favorite AI CLI.")
 
-        if chosen_cli and favorite_cli and chosen_cli != favorite_cli:
+        if chosen_cli and favorite_cli and chosen_cli != favorite_cli and not self.args.headless:
             if self.console.confirm(
                 f"Do you want to set '{chosen_cli}' as your new favorite AI CLI?",
                 default=False,
@@ -103,19 +115,22 @@ class AICommandMixin:
         favorite_model = self.config.ai.get_favorite_model(final_cli)
 
         if not chosen_model and not favorite_model:
-            choices = [("auto", "auto"), ("other", "Other (type it manually)")]
+            if self.args.headless:
+                favorite_model = "auto"
+            else:
+                choices = [("auto", "auto"), ("other", "Other (type it manually)")]
 
-            favorite_model = self.console.select(
-                f"Which model do you want to use for '{final_cli}' as your favorite?",
-                choices=choices,
-            )
-            if favorite_model == "other":
-                favorite_model = self.console.input("Please enter the model name:")
+                favorite_model = self.console.select(
+                    f"Which model do you want to use for '{final_cli}' as your favorite?",
+                    choices=choices,
+                )
+                if favorite_model == "other":
+                    favorite_model = self.console.input("Please enter the model name:")
 
             self.config.ai.set_favorite_model(final_cli, favorite_model)
             logger.info(f"Setting '{favorite_model}' as your favorite model for {final_cli}.")
 
-        if chosen_model and favorite_model and chosen_model != favorite_model:
+        if chosen_model and favorite_model and chosen_model != favorite_model and not self.args.headless:
             if self.console.confirm(
                 f"Do you want to set '{chosen_model}' as your new favorite model for {final_cli}?",
                 default=False,
@@ -131,6 +146,52 @@ class AICommandMixin:
             yolo=self.args.yolo,
             headless=self.args.headless,
         )
+
+    def _database_has_demo(self, database_obj) -> bool:
+        """Return True if the database has demo data installed."""
+        try:
+            result = database_obj.query("SELECT COUNT(*) FROM ir_module_module_demo")
+            return bool(result and result[0][0] > 0)
+        except Exception:
+            return False
+
+    def _database_is_neutralized(self, database_obj) -> bool:
+        """Return True if the database has been neutralized."""
+        try:
+            result = database_obj.query("SELECT value FROM ir_config_parameter WHERE key = 'database.is_neutralized'")
+            return bool(result and result[0][0] == "true")
+        except Exception:
+            return False
+
+    def _ensure_database_safety(self, database_name: str | None):
+        """Check if the database contains customer data and ask for confirmation if it does."""
+        if not database_name:
+            return
+
+        from odev.common.databases import LocalDatabase
+
+        db = LocalDatabase(database_name)
+        if not db.exists:
+            return
+
+        has_demo = self._database_has_demo(db)
+        is_neutralized = self._database_is_neutralized(db)
+
+        # If it has NO demo data OR it IS neutralized, it likely has customer data.
+        has_customer_data = not has_demo or is_neutralized
+
+        if has_customer_data:
+            reason = (
+                "no demo data detected" if not has_demo else "database is neutralized (indicates a production copy)"
+            )
+            logger.warning(f"Database '{database_name}' appears to contain customer data ({reason}).")
+            if not self.args.yolo and not self.console.confirm(
+                f"Are you sure you want to proceed with AI operations on database '{database_name}'?",
+                default=False,
+            ):
+                from odev.common.errors import CommandError
+
+                raise CommandError("Operation cancelled by user due to customer data concerns.")
 
     def _prepare_odoo_environment(self, versions: list[str]) -> dict[str, bool]:
         """Ensure required Odoo worktrees are present and up-to-date.
@@ -162,17 +223,15 @@ class AICommandMixin:
         ephemeral_pg: bool = True,
     ) -> bool:
         """Helper to run the AI agent with common Odoo-related sandbox paths."""
+        if database:
+            self._ensure_database_safety(database)
+
         agent = self.get_ai_agent()
-
-        paths = set()
-        if hasattr(self, "odoobin") and self.odoobin:
-            paths.update([p.as_posix() for p in self.odoobin.addons_paths if p.exists()])
-
-        paths.add(Path.cwd().as_posix())
 
         return agent.run(
             prompt,
-            sandbox_dirs=list(paths),
+            sandbox_dirs=[Path.cwd().as_posix()],
+            extra_bind_dirs=[str(d) for d in self.args.dirs] or None,
             database=database,
             resume=self.args.resume,
             ephemeral_pg=ephemeral_pg,

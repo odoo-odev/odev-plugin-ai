@@ -1,8 +1,5 @@
-from pathlib import Path
-
 from odev.commands.database.test import TestCommand as BaseTestCommand
 from odev.common import args
-from odev.common.errors import CommandError
 from odev.common.logging import logging
 
 from odev.plugins.odev_plugin_ai.common.mixins import AICommandMixin
@@ -26,44 +23,42 @@ class TestCommand(BaseTestCommand, AICommandMixin):
         if not self.args.ai:
             return super().run()
 
-        logger.info("Running tests locally before launching AI agent...")
-        try:
-            super().run()
-            if not self.test_buffer:
-                logger.info("Tests passed! No AI intervention needed.")
-                return
-            logger.info("Tests failed. Capturing logs and launching AI agent...")
-        except (RuntimeError, CommandError):
-            if not self.test_buffer:
-                raise
-            logger.info("Tests failed. Capturing logs and launching AI agent...")
+        if not self.args.no_auto_tags:
+            self.apply_auto_tags()
 
-        args_to_pass = [a for a in self._argv if a not in ("--ai",)]
+        _ai_bool = {"--ai", "-y", "--yolo", "-H", "--headless"}
+        _ai_valued = {"--cli", "--model", "--resume", "-d", "--dirs"}
 
-        if self.auto_tags:
-            args_to_pass.extend(["--test-tags", ",".join(self.auto_tags)])
-
+        args_to_pass, _skip = [], False
+        for _a in self._argv:
+            if _skip:
+                _skip = False
+            elif _a in _ai_bool:
+                pass
+            elif _a in _ai_valued:
+                _skip = True
+            else:
+                args_to_pass.append(_a)
         cmd_to_run = f"odev test {' '.join(args_to_pass)}"
-
-        log_file = Path(".odev-test-failures.log").resolve()
-        log_file.write_text("\n".join(self.test_buffer))
 
         custom_modules = [m for m in self.args.modules if m != "base"]
         modules_str = f" related to the following module(s): {', '.join(custom_modules)}" if custom_modules else ""
 
         prompt = (
-            f"I ran Odoo tests with the following command: `{cmd_to_run}`\n\n"
-            f"The tests FAILED. I have captured the failure logs in the file: `{log_file.name}`\n\n"
-            "Please:\n"
-            f"1. Read `{log_file.name}` to understand the failures.\n"
-            f"2. Analyze the failures{modules_str}.\n"
-            "   IMPORTANT: Your goal is to ensure the custom module(s) work correctly and integrate seamlessly with Odoo.\n"
-            "   - If a test fails IN the custom module, fix it.\n"
-            "   - If a standard Odoo test fails BECAUSE of your changes or overrides in the custom module, you MUST fix it (e.g., by adapting or monkey-patching the standard test within your custom module).\n"
-            "   - If a standard Odoo test fails and it is UNRELATED to the custom module and NOT caused by your changes, DO NOT attempt to fix it.\n"
-            "3. Fix the code or the tests for the custom module.\n"
-            "4. Verify your fixes by running the tests again (you can run specific tests to save time).\n"
-            "5. Provide a summary of your changes."
+            f"Run the following Odoo tests: `{cmd_to_run}`\n\n"
+            f"Analyze any failures{modules_str} and apply exactly one of the three rules below — nothing else:\n\n"
+            "RULE 1 — Custom test fails:\n"
+            "   The custom module code is broken (e.g. upgrade logic did not preserve the expected workflow).\n"
+            "   → Fix the custom module CODE so the workflow is correct again. Never weaken or skip the test.\n\n"
+            "RULE 2 — Standard Odoo test fails because of our custom code:\n"
+            "   Our changes altered a workflow or model that a standard test relied on.\n"
+            "   → Monkey-patch the standard test from within the custom module so it aligns with the new workflow.\n"
+            "   Never modify standard Odoo files. Never make the test trivially pass by removing assertions.\n\n"
+            "RULE 3 — Standard Odoo test fails for an unrelated reason:\n"
+            "   → Do nothing. Skip it and move on.\n\n"
+            f"After applying the fix, re-run using exactly `{cmd_to_run}` and repeat"
+            " until all Rule-1 and Rule-2 failures are resolved.\n"
+            "Finish with a summary of every change made and which rule justified it."
         )
 
         self.run_ai_agent(prompt, database=self.database_name)
