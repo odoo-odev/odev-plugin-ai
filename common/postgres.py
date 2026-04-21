@@ -1,3 +1,5 @@
+import re
+import shutil
 import subprocess
 import time
 from pathlib import Path
@@ -15,6 +17,46 @@ class PostgresSandbox(OdevFrameworkMixin):
     def __init__(self, headless: bool = False):
         super().__init__()
         self.headless = headless
+
+    def _get_pg_bin(self, name: str) -> str:
+        """Find a PostgreSQL binary by name, trying standard paths if not in PATH."""
+        bin_path = shutil.which(name)
+        if bin_path:
+            return bin_path
+
+        # Try to match the version of psql if it is in PATH (common on Ubuntu)
+        psql_path = shutil.which("psql")
+        if psql_path:
+            try:
+                out = subprocess.check_output([psql_path, "--version"], text=True)
+                # psql (PostgreSQL) 16.1 -> major version 16
+                match = re.search(r"\(PostgreSQL\)\s+(\d+)", out)
+                if match:
+                    major = match.group(1)
+                    candidate = Path(f"/usr/lib/postgresql/{major}/bin/{name}")
+                    if candidate.exists():
+                        return str(candidate)
+            except Exception:
+                pass
+
+        # Fallback: search all versions in /usr/lib/postgresql and pick highest
+        base = Path("/usr/lib/postgresql")
+        if base.exists():
+            # Get all version directories, sort numerically, pick highest
+            versions = []
+            for d in base.iterdir():
+                if d.is_dir():
+                    try:
+                        versions.append((float(d.name), d))
+                    except ValueError:
+                        pass
+            if versions:
+                versions.sort(reverse=True)
+                for _, v_dir in versions:
+                    candidate = v_dir / "bin" / name
+                    if candidate.exists():
+                        return str(candidate)
+        return name
 
     def setup(
         self,
@@ -80,12 +122,20 @@ class PostgresSandbox(OdevFrameworkMixin):
         self._create_database(ephemeral_socket_dir, user, database)
         try:
             p1 = subprocess.Popen(
-                ["pg_dump", "-h", str(host_socket_dir), "-d", database, "--no-owner", "--no-privileges"],
+                [
+                    self._get_pg_bin("pg_dump"),
+                    "-h",
+                    str(host_socket_dir),
+                    "-d",
+                    database,
+                    "--no-owner",
+                    "--no-privileges",
+                ],
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
             )
             p2 = subprocess.Popen(
-                ["psql", "-h", str(ephemeral_socket_dir), "-p", "5432", "-U", user, "-d", database],
+                [self._get_pg_bin("psql"), "-h", str(ephemeral_socket_dir), "-p", "5432", "-U", user, "-d", database],
                 stdin=p1.stdout,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.PIPE,
@@ -109,7 +159,7 @@ class PostgresSandbox(OdevFrameworkMixin):
         try:
             subprocess.run(
                 [
-                    "psql",
+                    self._get_pg_bin("psql"),
                     "-h",
                     str(socket_dir),
                     "-p",
@@ -137,7 +187,7 @@ class PostgresSandbox(OdevFrameworkMixin):
             # Use current host user as superuser so psql works without -U
             user = Path.home().name
             subprocess.run(
-                ["initdb", "-D", str(data_dir), "--nosync", "-U", user, "--auth=trust"],
+                [self._get_pg_bin("initdb"), "-D", str(data_dir), "--nosync", "-U", user, "--auth=trust"],
                 check=True,
                 capture_output=True,
             )
@@ -146,7 +196,7 @@ class PostgresSandbox(OdevFrameworkMixin):
             # We use port 5432 so client tools work by default
             process = subprocess.Popen(
                 [
-                    "postgres",
+                    self._get_pg_bin("postgres"),
                     "-D",
                     str(data_dir),
                     "-k",

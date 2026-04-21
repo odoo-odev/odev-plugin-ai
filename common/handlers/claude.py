@@ -53,7 +53,7 @@ class ClaudeHandler(BaseAgentHandler):
             for skill_pkg in skills_dir.iterdir():
                 if not skill_pkg.is_dir() or not (skill_pkg / "SKILL.md").exists():
                     continue
-                skills_dest.mkdir(exist_ok=True)
+                skills_dest.mkdir(parents=True, exist_ok=True)
                 # Claude / opencode-cli: inject via @import in the MD file
                 shutil.copy2(skill_pkg / "SKILL.md", skills_dest / f"{skill_pkg.name}.md")
                 skill_refs.append(f"@skills/{skill_pkg.name}.md")

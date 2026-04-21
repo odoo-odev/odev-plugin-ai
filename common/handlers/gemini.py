@@ -32,7 +32,7 @@ class GeminiHandler(BaseAgentHandler):
             for skill_pkg in skills_dir.iterdir():
                 if not skill_pkg.is_dir() or not (skill_pkg / "SKILL.md").exists():
                     continue
-                skills_dest.mkdir(exist_ok=True)
+                skills_dest.mkdir(parents=True, exist_ok=True)
                 dest = skills_dest / skill_pkg.name
                 if dest.exists():
                     shutil.rmtree(dest)
