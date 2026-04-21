@@ -216,6 +216,26 @@ class AICommandMixin:
             available[version] = worktree_path.exists()
         return available
 
+    def _get_sandbox_dirs(self, database_name: str | None = None) -> list[str]:
+        """Return the list of directories to include in the sandbox.
+
+        The first directory in the list will be used as the working directory.
+        If a database is provided, we try to use its repository path as the
+        working directory.
+        """
+        if database_name:
+            from odev.common.databases.local import LocalDatabase
+
+            db = LocalDatabase(database_name)
+            if db.exists and db.process:
+                # Try to get the repository path linked to the database
+                # Using additional_addons_paths is generally safer as it's what Odoo uses
+                addons_paths = db.process.additional_addons_paths
+                if addons_paths:
+                    return [str(p.resolve()) for p in addons_paths]
+
+        return [str(Path.cwd().resolve())]
+
     def run_ai_agent(
         self,
         prompt: str,
@@ -230,7 +250,7 @@ class AICommandMixin:
 
         return agent.run(
             prompt,
-            sandbox_dirs=[Path.cwd().as_posix()],
+            sandbox_dirs=self._get_sandbox_dirs(database),
             extra_bind_dirs=[str(d) for d in self.args.dirs] or None,
             database=database,
             resume=self.args.resume,

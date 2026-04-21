@@ -1,6 +1,5 @@
 """Launch an AI CLI agent sandboxed with bwrap."""
 
-from pathlib import Path
 
 from odev.common import args
 from odev.common.commands import DatabaseCommand
@@ -55,7 +54,7 @@ class AICommand(DatabaseCommand, AICommandMixin):
 
         self.get_ai_agent().run(
             prompt=" ".join(prompt_parts),
-            sandbox_dirs=[str(Path(".").resolve())],
+            sandbox_dirs=self._get_sandbox_dirs(database_name),
             extra_bind_dirs=[str(d) for d in self.args.dirs] or None,
             database=database_name,
             resume=self.args.resume,
