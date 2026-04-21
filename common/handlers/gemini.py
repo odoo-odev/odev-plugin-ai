@@ -1,5 +1,4 @@
 import shutil
-from pathlib import Path
 
 from .base import BaseAgentHandler
 
@@ -25,18 +24,12 @@ class GeminiHandler(BaseAgentHandler):
 
     def inject_skills(self, target_dir):
         skills_dest = target_dir / "skills"
-        for plugin in self.odev.plugins:
-            skills_dir = Path(plugin.path) / "skills"
-            if not skills_dir.is_dir():
-                continue
-            for skill_pkg in skills_dir.iterdir():
-                if not skill_pkg.is_dir() or not (skill_pkg / "SKILL.md").exists():
-                    continue
-                skills_dest.mkdir(parents=True, exist_ok=True)
-                dest = skills_dest / skill_pkg.name
-                if dest.exists():
-                    shutil.rmtree(dest)
-                shutil.copytree(skill_pkg, dest)
+        for skill in self.get_enabled_skills():
+            skills_dest.mkdir(parents=True, exist_ok=True)
+            dest = skills_dest / skill.name
+            if dest.exists():
+                shutil.rmtree(dest)
+            shutil.copytree(skill.path, dest)
 
     def get_command(self, prompt, resume, all_candidate_paths, model, headless, yolo):
         cmd = ["gemini"]

@@ -39,6 +39,15 @@ class BaseAgentHandler:
     def inject_skills(self, target_dir):
         """Inject skills into the agent's context."""
 
+    def get_enabled_skills(self):
+        """Return a list of enabled Skill objects."""
+        from odev.plugins.odev_plugin_ai.common.skills import SkillManager
+
+        manager = SkillManager(self.odev)
+        available = manager.list_available_skills()
+        disabled = self.odev.config.skills.disabled
+        return [s for s in available if s.name not in disabled]
+
     def inject_trust(self, target_dir, trusted_paths):
         """Inject trusted paths into the agent's config."""
         try:

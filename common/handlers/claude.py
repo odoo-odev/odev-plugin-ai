@@ -1,6 +1,5 @@
 import json
 import shutil
-from pathlib import Path
 
 from odev.common.logging import logging
 
@@ -46,17 +45,11 @@ class ClaudeHandler(BaseAgentHandler):
         skills_dest = target_dir / "skills"
         skill_refs = []
 
-        for plugin in self.odev.plugins:
-            skills_dir = Path(plugin.path) / "skills"
-            if not skills_dir.is_dir():
-                continue
-            for skill_pkg in skills_dir.iterdir():
-                if not skill_pkg.is_dir() or not (skill_pkg / "SKILL.md").exists():
-                    continue
-                skills_dest.mkdir(parents=True, exist_ok=True)
-                # Claude / opencode-cli: inject via @import in the MD file
-                shutil.copy2(skill_pkg / "SKILL.md", skills_dest / f"{skill_pkg.name}.md")
-                skill_refs.append(f"@skills/{skill_pkg.name}.md")
+        for skill in self.get_enabled_skills():
+            skills_dest.mkdir(parents=True, exist_ok=True)
+            # Claude / opencode-cli: inject via @import in the MD file
+            shutil.copy2(skill.path / "SKILL.md", skills_dest / f"{skill.name}.md")
+            skill_refs.append(f"@skills/{skill.name}.md")
 
         if skill_refs:
             md_file = target_dir / md_filename
