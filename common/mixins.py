@@ -147,6 +147,52 @@ class AICommandMixin:
             headless=self.args.headless,
         )
 
+    def _database_has_demo(self, database_obj) -> bool:
+        """Return True if the database has demo data installed."""
+        try:
+            result = database_obj.query("SELECT COUNT(*) FROM ir_module_module_demo")
+            return bool(result and result[0][0] > 0)
+        except Exception:
+            return False
+
+    def _database_is_neutralized(self, database_obj) -> bool:
+        """Return True if the database has been neutralized."""
+        try:
+            result = database_obj.query("SELECT value FROM ir_config_parameter WHERE key = 'database.is_neutralized'")
+            return bool(result and result[0][0] == "true")
+        except Exception:
+            return False
+
+    def _ensure_database_safety(self, database_name: str | None):
+        """Check if the database contains customer data and ask for confirmation if it does."""
+        if not database_name:
+            return
+
+        from odev.common.databases import LocalDatabase
+
+        db = LocalDatabase(database_name)
+        if not db.exists:
+            return
+
+        has_demo = self._database_has_demo(db)
+        is_neutralized = self._database_is_neutralized(db)
+
+        # If it has NO demo data OR it IS neutralized, it likely has customer data.
+        has_customer_data = not has_demo or is_neutralized
+
+        if has_customer_data:
+            reason = (
+                "no demo data detected" if not has_demo else "database is neutralized (indicates a production copy)"
+            )
+            logger.warning(f"Database '{database_name}' appears to contain customer data ({reason}).")
+            if not self.args.yolo and not self.console.confirm(
+                f"Are you sure you want to proceed with AI operations on database '{database_name}'?",
+                default=False,
+            ):
+                from odev.common.errors import CommandError
+
+                raise CommandError("Operation cancelled by user due to customer data concerns.")
+
     def _prepare_odoo_environment(self, versions: list[str]) -> dict[str, bool]:
         """Ensure required Odoo worktrees are present and up-to-date.
 
@@ -177,6 +223,9 @@ class AICommandMixin:
         ephemeral_pg: bool = True,
     ) -> bool:
         """Helper to run the AI agent with common Odoo-related sandbox paths."""
+        if database:
+            self._ensure_database_safety(database)
+
         agent = self.get_ai_agent()
 
         return agent.run(

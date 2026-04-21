@@ -50,6 +50,9 @@ class AICommand(DatabaseCommand, AICommandMixin):
             prompt_parts.insert(0, database_name)
             database_name = None
 
+        if database_name:
+            self._ensure_database_safety(database_name)
+
         self.get_ai_agent().run(
             prompt=" ".join(prompt_parts),
             sandbox_dirs=[str(Path(".").resolve())],

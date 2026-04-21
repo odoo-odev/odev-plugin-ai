@@ -42,14 +42,6 @@ class RunCommand(BaseRunCommand, AICommandMixin):
         if "--stop-after-init" not in odoo_args:
             self.args.odoo_args = odoo_args + ["--stop-after-init"]
 
-    def _database_has_demo(self) -> bool:
-        """Return True if the database has demo data installed."""
-        try:
-            result = self._database.query("SELECT COUNT(*) FROM ir_module_module_demo")
-            return bool(result and result[0][0] > 0)
-        except Exception:
-            return False
-
     def _has_installation_errors(self) -> bool:
         """Return True if the buffer contains module installation errors despite a zero exit code."""
         return any("ERROR" in line or "CRITICAL" in line for line in self.run_buffer)
@@ -68,10 +60,14 @@ class RunCommand(BaseRunCommand, AICommandMixin):
 
         self._ensure_stop_after_init()
 
-        if self._database_has_demo():
-            self._run_ai_with_demo()
-        else:
+        has_demo = self._database_has_demo(self._database)
+        is_neutralized = self._database_is_neutralized(self._database)
+
+        if not has_demo or is_neutralized:
+            self._ensure_database_safety(self.database_name)
             self._run_ai_without_demo()
+        else:
+            self._run_ai_with_demo()
 
     def _run_ai_with_demo(self):
         """Demo data present: LLM can install and fix directly."""
@@ -118,9 +114,9 @@ class RunCommand(BaseRunCommand, AICommandMixin):
         self.run_ai_agent(prompt, database=self.database_name)
 
     def _run_ai_without_demo(self):
-        """No demo data (customer data): secure mode — only errors shared with LLM, loop until fixed."""
+        """No demo data or neutralized (customer data): secure mode — only errors shared with LLM, loop until fixed."""
         logger.warning(
-            "No demo data detected (customer data). Running in secure mode: "
+            "Customer data detected (no demo data or neutralized). Running in secure mode: "
             "only error logs will be shared with the AI agent."
         )
 

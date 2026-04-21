@@ -1,6 +1,4 @@
 import json
-import os
-import re
 import subprocess
 import tempfile
 from pathlib import Path
@@ -8,6 +6,7 @@ from pathlib import Path
 from odev.common.logging import logging
 
 from .bwrap import BwrapSandbox
+from .handlers import get_agent_handler
 from .postgres import PostgresSandbox
 
 
@@ -17,117 +16,26 @@ logger = logging.getLogger(__name__)
 class AgentCLI(BwrapSandbox):
     """An execution wrapper for CLI AI agents (claude, gemini, copilot)."""
 
-    @staticmethod
-    def _guest_paths(all_candidate_paths: list[str]) -> list[str]:
-        """Return the guest-side path from each 'host:guest' entry."""
-        return [d.split(":", 1)[1] if ":" in d else d for d in all_candidate_paths]
-
-    def _get_gemini_agent_cmd(
+    def __init__(
         self,
-        prompt: str | None,
-        resume: str | None,
-        all_candidate_paths: list[str],
-        host_home: Path,
-    ) -> list[str]:
-        """Build the gemini agent command."""
-        cmd = ["gemini"]
-        if prompt:
-            cmd.extend(["-p" if self.headless else "-i", prompt])
-        if resume:
-            cmd.extend(["--resume", resume])
-        cmd.append("--approval-mode")
-        cmd.append("yolo" if self.yolo else "auto_edit")
-        if self.model and self.model != "auto":
-            cmd.extend(["-m", self.model])
-        for path in self._guest_paths(all_candidate_paths):
-            cmd.extend(["--include-directories", path])
-        return cmd
+        cli: str,
+        model: str = "auto",
+        yolo: bool = False,
+        headless: bool = False,
+    ):
+        host_home = Path.home().resolve()
+        # Initialize the strategy handler for the specific agent
+        from odev.common.odev import Odev
 
-    def _get_copilot_agent_cmd(
-        self,
-        prompt: str | None,
-        resume: str | None,
-        all_candidate_paths: list[str],
-    ) -> list[str]:
-        """Build the copilot agent command."""
-        cmd = ["copilot"]
-        if prompt:
-            cmd.extend(["-p" if self.headless else "-i", prompt])
-        if resume:
-            cmd.append(f"--resume={resume}")
-        if self.yolo:
-            cmd.append("--yolo")
-        else:
-            cmd.extend(
-                [
-                    "--allow-tool=read",
-                    "--allow-tool=write",
-                    "--allow-tool=shell(rtk:*)",
-                    "--allow-tool=shell(odev:*)",
-                    "--allow-tool=shell(git:*)",
-                    "--allow-tool=shell(pre-commit:*)",
-                ]
-            )
-        if self.model and self.model != "auto":
-            cmd.extend(["-m", self.model])
-        for path in self._guest_paths(all_candidate_paths):
-            cmd.extend(["--add-dir", path])
-        return cmd
+        self.handler = get_agent_handler(cli, host_home, Odev())
 
-    def _get_opencode_agent_cmd(
-        self,
-        prompt: str | None,
-        resume: str | None,
-        all_candidate_paths: list[str],
-        host_home: Path,
-    ) -> list[str]:
-        """Build the opencode-cli agent command."""
-        opencode_bin = host_home / ".opencode/bin/opencode"
-        if not opencode_bin.exists():
-            logger.error(f"opencode binary not found at {opencode_bin}")
-            return []
-        cmd = [str(opencode_bin), "run"]
-        if prompt:
-            cmd.append(prompt)
-        if resume:
-            cmd.extend(["--session", resume])
-        if self.model and self.model != "auto":
-            cmd.extend(["-m", self.model])
-        for path in self._guest_paths(all_candidate_paths):
-            cmd.extend(["--add-dir", path])
-        return cmd
-
-    def _get_claude_agent_cmd(
-        self,
-        prompt: str | None,
-        resume: str | None,
-        all_candidate_paths: list[str],
-    ) -> list[str]:
-        """Build the claude agent command."""
-        cmd = ["claude"]
-        if prompt:
-            if self.headless:
-                cmd.extend(["-p", prompt])
-            else:
-                cmd.append(prompt)
-        if resume:
-            cmd.extend(["--session-id", resume])
-        if self.yolo:
-            cmd.append("--dangerously-skip-permissions")
-        else:
-            cmd.extend(
-                [
-                    "--permission-mode",
-                    "acceptEdits",
-                    "--allowedTools",
-                    "Bash(rtk:*),Bash(odev:*),Bash(git:*),Bash(pre-commit:*),Read,Edit",
-                ]
-            )
-        if self.model and self.model != "auto":
-            cmd.extend(["--model", self.model])
-        for path in self._guest_paths(all_candidate_paths):
-            cmd.extend(["--add-dir", path])
-        return cmd
+        super().__init__(
+            cli=cli,
+            handler=self.handler,
+            model=model,
+            yolo=yolo,
+            headless=headless,
+        )
 
     def _get_agent_setup(
         self,
@@ -137,35 +45,35 @@ class AgentCLI(BwrapSandbox):
         host_home: Path,
     ) -> tuple[list[str], list[Path], list[Path]]:
         """Determine agent-specific command, directories, and files to mount."""
-        # We don't bind-mount host configs directly anymore to prevent
-        # 'Workspace Trust' issues inside the sandbox. Instead, we rely on
-        # the sanitized configs in the playground.
         agent_dirs = [
             host_home / ".cache",
             host_home / ".local",
+            host_home / ".config" / "rtk",
             host_home / ".claude",
-            host_home / ".gemini",
-            host_home / ".opencode",
         ]
         agent_files = [
             host_home / ".gitconfig",
-            host_home / ".claude.json",
         ]
+
+        # Add agent-specific directories/files from the handler
+        for d in self.handler.get_config_dirs():
+            agent_dirs.append(host_home / d)
+        for f in self.handler.get_config_files():
+            agent_files.append(host_home / f)
+
         # Include .env if it exists in the current directory
         env_file = Path.cwd() / ".env"
         if env_file.exists():
             agent_files.append(env_file)
 
-        if self.cli == "gemini":
-            agent_cmd = self._get_gemini_agent_cmd(prompt, resume, all_candidate_paths, host_home)
-        elif self.cli == "copilot":
-            agent_cmd = self._get_copilot_agent_cmd(prompt, resume, all_candidate_paths)
-        elif self.cli == "opencode-cli":
-            agent_cmd = self._get_opencode_agent_cmd(prompt, resume, all_candidate_paths, host_home)
-            if not agent_cmd:
-                return [], [], []
-        else:
-            agent_cmd = self._get_claude_agent_cmd(prompt, resume, all_candidate_paths)
+        agent_cmd = self.handler.get_command(
+            prompt=prompt,
+            resume=resume,
+            all_candidate_paths=all_candidate_paths,
+            model=self.model,
+            headless=self.headless,
+            yolo=self.yolo,
+        )
 
         return agent_cmd, agent_dirs, agent_files
 
@@ -178,15 +86,11 @@ class AgentCLI(BwrapSandbox):
         db_user: str | None = None,
         version: str | None = None,
         resume: str | None = None,
-        path_mapping: dict[str, str] | None = None,
         ephemeral_pg: bool = True,
         cwd: str | None = None,
     ) -> bool:
         """Run the AI agent within a bwrap sandbox."""
-        if path_mapping is None:
-            path_mapping = {}
-
-        host_home = Path.home()
+        host_home = Path.home().resolve()
         playground = Path(tempfile.mkdtemp(prefix=f"odev-ai-{self.cli}-"))
         sandbox_tmp = Path(tempfile.mkdtemp(prefix=f"odev-ai-tmp-{self.cli}-"))
         proxy_dir = Path(tempfile.mkdtemp(prefix="odev-ai-pg-"))
@@ -202,15 +106,17 @@ class AgentCLI(BwrapSandbox):
         active_venv_path = sandbox_data["active_venv_path"]
 
         if not cwd:
-            cwd = "/custom" if any(b[1] == Path("/custom") for b in final_binds) else str(host_home)
+            # Default to the primary workspace bind or home
+            primary_bind = next((b for b in final_binds if b[3]), None)
+            cwd = str(primary_bind[1]) if primary_bind else str(host_home)
 
-        # Binds where src != dst are Type B shortcuts (/custom, /upgrade, /worktrees, ...)
-        all_candidate_paths = [f"{src}:{dst}" for src, dst, _, _ in final_binds if src != dst]
-        # Sync path_mapping with Type B binds so _prepare_odev_config rewrites paths correctly
-        for src, dst, _, _ in final_binds:
-            if src != dst:
-                path_mapping.setdefault(str(src), str(dst))
+        # Candidate paths for trustedDirectories and --add-dir inclusion
+        all_candidate_paths = [f"{src}:{dst}" for src, dst, _, _ in final_binds if src != host_home]
+
         agent_cmd, agent_dirs, agent_files = self._get_agent_setup(prompt, resume, all_candidate_paths, host_home)
+
+        if not agent_cmd:
+            return False
 
         if database:
             db_info = (
@@ -308,15 +214,13 @@ class AgentCLI(BwrapSandbox):
                     cmd.extend(["--dir", td])
                     top_dirs.add(td)
 
-        self._prepare_odev_config(playground, path_mapping, host_home)
+        self._prepare_odev_config(playground, host_home)
         self._add_system_binds(cmd, host_home, sandbox_tmp, cwd)
 
         pg_sandbox = PostgresSandbox(headless=self.headless)
         pg_process = pg_sandbox.setup(cmd, database, proxy_dir, pg_data_dir, ephemeral=ephemeral_pg)
 
-        self._setup_rtk_sandbox(cmd, playground, host_home)
-
-        self._apply_final_bindings(cmd, agent_dirs, agent_files, final_binds, host_home, playground, path_mapping)
+        self._apply_final_bindings(cmd, agent_dirs, agent_files, final_binds, host_home, playground)
         self._prepare_agent_config(playground, all_candidate_paths, host_home)
 
         cmd.extend(["--", *agent_cmd])
@@ -339,13 +243,11 @@ class AgentCLI(BwrapSandbox):
         """Return the ID of the most recent session for this agent CLI."""
         try:
             home = Path.home()
-            sessions_file = None
             if self.cli == "gemini":
                 sessions_file = home / ".gemini" / "sessions.json"
             elif self.cli in ("claude", "opencode-cli"):
                 sessions_file = home / ".claude" / "sessions.json"
             else:
-                logger.debug(f"Session resumption not supported for '{self.cli}'")
                 return None
 
             if sessions_file and sessions_file.exists():
@@ -357,41 +259,12 @@ class AgentCLI(BwrapSandbox):
             logger.debug(f"Could not read latest session id for {self.cli!r}: {e}")
         return None
 
-    def _collect_secrets(self) -> list[tuple[str, str]]:  # noqa: C901
-        """Retrieve and interactively prompt for AI API secrets."""
-        relevant = {
-            "claude": ["ANTHROPIC_API_KEY", "GITHUB_TOKEN"],
-            "gemini": ["GEMINI_API_KEY", "GITHUB_TOKEN"],
-            "copilot": [
-                "GITHUB_TOKEN",
-                "OPENAI_API_KEY",
-                "ANTHROPIC_API_KEY",
-            ],
-            "openai": ["OPENAI_API_KEY", "GITHUB_TOKEN"],
-        }
-        to_process = relevant.get(self.cli, [])
+    def _collect_secrets(self) -> list[tuple[str, str]]:
+        """Retrieve GITHUB_TOKEN for PR creation and other GitHub operations."""
         found_secrets: dict[str, str] = {}
 
-        for key in to_process:
-            val = os.environ.get(key)
-            if val:
-                found_secrets[key] = val
-
-        env_file = Path.cwd() / ".env"
-        if env_file.exists():
-            try:
-                content = env_file.read_text()
-                for key in to_process:
-                    if key not in found_secrets:
-                        # Simple regex to find KEY=VAL or KEY="VAL"
-                        pattern = rf"^{key}=[\"']?(.*?)[\"']?$"
-                        match = re.search(pattern, content, re.MULTILINE)
-                        if match:
-                            found_secrets[key] = match.group(1).strip()
-            except Exception:
-                pass
-
-        if "GITHUB_TOKEN" not in found_secrets and "GH_TOKEN" not in found_secrets:
+        # 1. Check 'gh' CLI
+        if "GITHUB_TOKEN" not in found_secrets:
             try:
                 token = subprocess.check_output(
                     ["gh", "auth", "token"],
@@ -403,48 +276,35 @@ class AgentCLI(BwrapSandbox):
             except Exception:
                 pass
 
-        # Copilot checks env vars in order: COPILOT_GITHUB_TOKEN > GH_TOKEN > GITHUB_TOKEN.
-        # The keyring stores the same gho_ OAuth token that gh uses, so we alias it to
-        # COPILOT_GITHUB_TOKEN (highest precedence) so copilot uses it without keyring access.
-        if self.cli == "copilot" and "GITHUB_TOKEN" in found_secrets:
-            found_secrets.setdefault("COPILOT_GITHUB_TOKEN", found_secrets["GITHUB_TOKEN"])
-
-        from odev.common.store.datastore import DataStore
-
-        ds = DataStore().secrets
-
-        for key in to_process:
-            if key in found_secrets:
-                continue
-
+        # 2. Check Odev DataStore
+        if "GITHUB_TOKEN" not in found_secrets:
             try:
-                is_opt = key in (
-                    ["GH_TOKEN", "OPENAI_API_KEY", "ANTHROPIC_API_KEY"]
-                    if self.cli == "copilot"
-                    # Claude Code authenticates via OAuth (hosts.json), API key is optional
-                    else ["ANTHROPIC_API_KEY", "GH_TOKEN"]
-                    if self.cli == "claude"
-                    else []
-                )
-                # If headless, we NEVER prompt. We fail later if required.
-                ask = not is_opt and not self.headless
+                from odev.common.store.datastore import DataStore
 
-                p_fmt = "GitHub Token:" if "GITHUB" in key else f"{key}:"
-                secret_obj = ds.get(
-                    key,
-                    ask_missing=ask,
-                    fields=["password"],
-                    prompt_format=p_fmt,
-                )
-                if secret_obj.password:
-                    found_secrets[key] = secret_obj.password
+                ds = DataStore().secrets
+
+                # Try GH_TOKEN then GITHUB_TOKEN from store
+                for key in ["GH_TOKEN", "GITHUB_TOKEN"]:
+                    secret_obj = ds.get(key, ask_missing=False, fields=["password"])
+                    if secret_obj.password:
+                        found_secrets["GITHUB_TOKEN"] = secret_obj.password
+                        break
+
+                # If still missing and not headless, prompt
+                if "GITHUB_TOKEN" not in found_secrets and not self.headless:
+                    secret_obj = ds.get(
+                        "GITHUB_TOKEN",
+                        ask_missing=True,
+                        fields=["password"],
+                        prompt_format="GitHub Token:",
+                    )
+                    if secret_obj.password:
+                        found_secrets["GITHUB_TOKEN"] = secret_obj.password
             except Exception as e:
-                logger.debug(f"Could not retrieve secret {key!r}: {e}")
+                logger.debug(f"Could not retrieve GitHub secret from DataStore: {e}")
 
-        # Mirror canonical keys to their common aliases for underlying tool compatibility
+        # Mirror canonical keys
         if "GITHUB_TOKEN" in found_secrets:
             found_secrets["GH_TOKEN"] = found_secrets["GITHUB_TOKEN"]
-        if "GEMINI_API_KEY" in found_secrets:
-            found_secrets["GOOGLE_API_KEY"] = found_secrets["GEMINI_API_KEY"]
 
         return list(found_secrets.items())
