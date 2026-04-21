@@ -163,16 +163,19 @@ class AICommandMixin:
         except Exception:
             return False
 
-    def _ensure_database_safety(self, database_name: str | None):
-        """Check if the database contains customer data and ask for confirmation if it does."""
+    def _ensure_database_safety(self, database_name: str | None) -> bool:
+        """Check if the database contains customer data and ask for confirmation if it does.
+
+        Returns True if the data should be cloned into the sandbox, False otherwise.
+        """
         if not database_name:
-            return
+            return False
 
         from odev.common.databases import LocalDatabase
 
         db = LocalDatabase(database_name)
         if not db.exists:
-            return
+            return False
 
         has_demo = self._database_has_demo(db)
         is_neutralized = self._database_is_neutralized(db)
@@ -185,13 +188,18 @@ class AICommandMixin:
                 "no demo data detected" if not has_demo else "database is neutralized (indicates a production copy)"
             )
             logger.warning(f"Database '{database_name}' appears to contain customer data ({reason}).")
-            if not self.args.yolo and not self.console.confirm(
+
+            if self.args.yolo:
+                # YOLO: don't clone sensible data, but proceed
+                return False
+
+            if not self.console.confirm(
                 f"Are you sure you want to proceed with AI operations on database '{database_name}'?",
                 default=False,
             ):
-                from odev.common.errors import CommandError
+                return False
 
-                raise CommandError("Operation cancelled by user due to customer data concerns.")
+        return True
 
     def _prepare_odoo_environment(self, versions: list[str]) -> dict[str, bool]:
         """Ensure required Odoo worktrees are present and up-to-date.
@@ -216,7 +224,7 @@ class AICommandMixin:
             available[version] = worktree_path.exists()
         return available
 
-    def _get_sandbox_dirs(self, database_name: str | None = None) -> list[str]:
+    def _get_sandbox_dirs(self, database_name: str | None = None, cwd: Path | None = None) -> list[str]:
         """Return the list of directories to include in the sandbox.
 
         The first directory in the list will be used as the working directory.
@@ -234,7 +242,15 @@ class AICommandMixin:
                 if addons_paths:
                     return [str(p.resolve()) for p in addons_paths]
 
-        return [str(Path.cwd().resolve())]
+        target_dir = (cwd or Path.cwd()).resolve()
+        # If we are in the home directory, we don't want to launch the AI agent there.
+        # Instead, we use a playground directory inside the odev home.
+        if target_dir == Path.home().resolve():
+            playground = self.odev.home_path / "playground"
+            playground.mkdir(parents=True, exist_ok=True)
+            return [str(playground)]
+
+        return [str(target_dir)]
 
     def run_ai_agent(
         self,
@@ -243,14 +259,18 @@ class AICommandMixin:
         ephemeral_pg: bool = True,
     ) -> bool:
         """Helper to run the AI agent with common Odoo-related sandbox paths."""
+        sandbox_dirs = self._get_sandbox_dirs(database)
+
         if database:
-            self._ensure_database_safety(database)
+            should_clone = self._ensure_database_safety(database)
+            if not should_clone:
+                database = None
 
         agent = self.get_ai_agent()
 
         return agent.run(
             prompt,
-            sandbox_dirs=self._get_sandbox_dirs(database),
+            sandbox_dirs=sandbox_dirs,
             extra_bind_dirs=[str(d) for d in self.args.dirs] or None,
             database=database,
             resume=self.args.resume,
