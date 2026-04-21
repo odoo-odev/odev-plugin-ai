@@ -16,6 +16,36 @@ from odev.common.version import OdooVersion
 logger = logging.getLogger(__name__)
 
 
+def _check_bwrap_support():
+    """Check if bwrap can run with unprivileged user namespaces.
+    Specifically targets Ubuntu 24.04+ restrictions.
+    """
+    try:
+        # Try a minimal bwrap command that requires user namespaces
+        subprocess.run(
+            ["bwrap", "--unshare-user", "--true"],
+            capture_output=True,
+            check=True,
+            timeout=2,
+        )
+        return True, ""
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError) as e:
+        stderr = getattr(e, "stderr", b"").decode()
+        if "Permission denied" in stderr or "setting up uid map" in stderr:
+            # Check for Ubuntu-specific sysctl
+            apparmor_restrict_path = Path("/proc/sys/kernel/apparmor_restrict_unprivileged_userns")
+            if apparmor_restrict_path.exists() and apparmor_restrict_path.read_text().strip() == "1":
+                return False, (
+                    "Your system (Ubuntu 24.04+) is restricting unprivileged user namespaces via AppArmor.\n"
+                    "This prevents the AI sandbox from starting.\n\n"
+                    "To fix this, run:\n"
+                    "  sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0\n\n"
+                    "To make it permanent:\n"
+                    "  echo 'kernel.apparmor_restrict_unprivileged_userns = 0' | sudo tee /etc/sysctl.d/60-apparmor-namespace.conf"
+                )
+        return False, f"Sandbox initialization failed: {stderr or str(e)}"
+
+
 class BwrapSandbox(OdevFrameworkMixin):
     """Manages a bwrap execution environment."""
 
@@ -430,6 +460,11 @@ class BwrapSandbox(OdevFrameworkMixin):
                 bash.run(full_cmd)
         except subprocess.CalledProcessError as error:
             returncode = error.returncode
+            # If bwrap failed, run diagnostic
+            supported, message = _check_bwrap_support()
+            if not supported:
+                console.print(f"\n[bold red]Error:[/] {message}")
+                return False
         except Exception as e:
             logger.error(f"Failed to run {self.cli}: {e}")
             return False
