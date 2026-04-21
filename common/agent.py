@@ -61,6 +61,12 @@ class AgentCLI(BwrapSandbox):
         for f in self.handler.get_config_files():
             agent_files.append(host_home / f)
 
+        # Node.js managers (NVM, n, asdf) and npm
+        for node_dir in [".nvm", ".n", ".asdf", ".npm"]:
+            p = host_home / node_dir
+            if p.exists():
+                agent_dirs.append(p)
+
         # Include .env if it exists in the current directory
         env_file = Path.cwd() / ".env"
         if env_file.exists():
@@ -134,6 +140,17 @@ class AgentCLI(BwrapSandbox):
         sandbox_path_items = []
         if active_venv_path:
             sandbox_path_items.append(str(active_venv_path / "bin"))
+
+        # Add the directory containing the current host node to the sandbox path.
+        # This ensures that if the user is using NVM, 'node' inside the sandbox
+        # matches 'node' outside.
+        import shutil
+
+        host_node = shutil.which("node")
+        if host_node:
+            node_bin_dir = str(Path(host_node).parent)
+            if node_bin_dir not in sandbox_path_items:
+                sandbox_path_items.append(node_bin_dir)
 
         sandbox_path_items.extend(
             [
