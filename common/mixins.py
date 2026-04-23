@@ -150,6 +150,12 @@ class AICommandMixin:
     def _database_has_demo(self, database_obj) -> bool:
         """Return True if the database has demo data installed."""
         try:
+            # Standard Odoo way to check if demo data is loaded
+            result = database_obj.query("SELECT COUNT(*) FROM ir_module_module WHERE demo = true")
+            if result and result[0][0] > 0:
+                return True
+
+            # Fallback for older versions or specific configurations
             result = database_obj.query("SELECT COUNT(*) FROM ir_module_module_demo")
             return bool(result and result[0][0] > 0)
         except Exception:

@@ -189,6 +189,11 @@ class BwrapSandbox(OdevFrameworkMixin):
             )
         )
 
+        # Sort binds by destination path length (ascending) to ensure parents are mounted before children.
+        # For same length (e.g. same path), we ensure RW (ro=False) comes after RO (ro=True)
+        # so that the RW mount wins in bwrap.
+        binds.sort(key=lambda b: (len(b[1].parts), not b[2]))
+
         return {"binds": binds, "active_venv_path": self._resolve_active_venv(database, version)}
 
     def _resolve_active_venv(self, database: str | None, version: str | None) -> Path | None:
@@ -395,7 +400,7 @@ class BwrapSandbox(OdevFrameworkMixin):
                 ensure_dst(f, is_dir=False)
                 cmd.extend(["--bind-try", str(f), str(f)])
 
-        # final_binds is already sorted by depth from _prepare_sandbox_config
+        # final_binds is sorted by depth in _prepare_sandbox_config to ensure correct mount order.
         for src, dst, ro, _is_primary in final_binds:
             ensure_dst(dst, is_dir=src.is_dir())
             cmd.extend(["--ro-bind-try" if ro else "--bind-try", str(src), str(dst)])

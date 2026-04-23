@@ -33,6 +33,11 @@ This skill provides instructions on how to use `odev` (Odoo Development CLI) dur
     - **Incorrect**: `odev upgrade-code --glob my_module/**/*`
     - **MANDATORY**: You MUST always include `--stop-after-init` when using `odev run` or `odev deploy` for
       verification. Failure to do so will cause the shell to hang.
+6. **ADDONS PATHS**: `odev` automatically manages Odoo and Enterprise addons paths based on the specified version
+   (`-V`). You should **NEVER** manually specify standard Odoo paths (like `odoo/addons` or `enterprise`). `odev`
+   handles this internally. Additionally, `odev` automatically includes the repository path of the targeted database. If
+   you are working in a custom folder, `odev` will often include it if it's detected as an addons path. Trust `odev` for
+   the plumbing to avoid version mismatches.
 
 ## Core Commands
 
@@ -78,6 +83,19 @@ This skill provides instructions on how to use `odev` (Odoo Development CLI) dur
 
     -   Hot-deploys a module to a **running** Odoo instance.
     -   **Example**: `odev deploy /custom/my_module`
+
+-   **`odev kill -H <database> [options]`**:
+
+    -   Kills the running Odoo process associated with a database.
+    -   Use `-H` (hard) to send a SIGKILL if the process is stuck.
+    -   **Example**: `odev kill my_db`
+
+-   **`odev delete -f <database> [options]`**:
+
+    -   Deletes an existing database and its associated resources (filestore, config).
+    -   **MANDATORY**: Use `-f` (force) to bypass confirmation prompts.
+    -   **Prerequisite**: If the database is currently running, you MUST kill it first using `odev kill <database>`.
+    -   **Example**: `odev delete -f my_db`
 
 -   **`odev upgrade-code <database> --from <ver> --to <ver>`**:
     -   Automatically migrates source code for common renames (e.g., `<tree>` to `<list>` in Odoo 18.0+).
