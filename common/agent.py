@@ -1,5 +1,4 @@
 import json
-import subprocess
 import tempfile
 from pathlib import Path
 
@@ -205,7 +204,7 @@ class AgentCLI(BwrapSandbox):
             "1",
         ]
 
-        secrets_to_set = self._collect_secrets()
+        secrets_to_set = self._setup_github_token()
         if database:
             cmd.extend(["--setenv", "PGDATABASE", database])
 
@@ -276,52 +275,21 @@ class AgentCLI(BwrapSandbox):
             logger.debug(f"Could not read latest session id for {self.cli!r}: {e}")
         return None
 
-    def _collect_secrets(self) -> list[tuple[str, str]]:
+    def _setup_github_token(self) -> list[tuple[str, str]]:
         """Retrieve GITHUB_TOKEN for PR creation and other GitHub operations."""
-        found_secrets: dict[str, str] = {}
+        try:
+            from odev.common.connectors.git import GITHUB_DOMAIN
 
-        # 1. Check 'gh' CLI
-        if "GITHUB_TOKEN" not in found_secrets:
-            try:
-                token = subprocess.check_output(
-                    ["gh", "auth", "token"],
-                    text=True,
-                    stderr=subprocess.DEVNULL,
-                ).strip()
-                if token:
-                    found_secrets["GITHUB_TOKEN"] = token
-            except Exception:
-                pass
+            token = self.store.secrets.get(
+                GITHUB_DOMAIN,
+                scope="api",
+                fields=["password"],
+                ask_missing=True,
+            ).password
 
-        # 2. Check Odev DataStore
-        if "GITHUB_TOKEN" not in found_secrets:
-            try:
-                from odev.common.store.datastore import DataStore
+            if token:
+                return [("GITHUB_TOKEN", token), ("GH_TOKEN", token)]
+        except Exception as e:
+            logger.debug(f"Could not retrieve GitHub secret: {e}")
 
-                ds = DataStore().secrets
-
-                # Try GH_TOKEN then GITHUB_TOKEN from store
-                for key in ["GH_TOKEN", "GITHUB_TOKEN"]:
-                    secret_obj = ds.get(key, ask_missing=False, fields=["password"])
-                    if secret_obj.password:
-                        found_secrets["GITHUB_TOKEN"] = secret_obj.password
-                        break
-
-                # If still missing and not headless, prompt
-                if "GITHUB_TOKEN" not in found_secrets and not self.headless:
-                    secret_obj = ds.get(
-                        "GITHUB_TOKEN",
-                        ask_missing=True,
-                        fields=["password"],
-                        prompt_format="GitHub Token:",
-                    )
-                    if secret_obj.password:
-                        found_secrets["GITHUB_TOKEN"] = secret_obj.password
-            except Exception as e:
-                logger.debug(f"Could not retrieve GitHub secret from DataStore: {e}")
-
-        # Mirror canonical keys
-        if "GITHUB_TOKEN" in found_secrets:
-            found_secrets["GH_TOKEN"] = found_secrets["GITHUB_TOKEN"]
-
-        return list(found_secrets.items())
+        return []
