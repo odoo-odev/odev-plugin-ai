@@ -116,7 +116,7 @@ class AgentCLI(BwrapSandbox):
             cwd = str(primary_bind[1]) if primary_bind else str(host_home)
 
         # Candidate paths for trustedDirectories and --add-dir inclusion
-        all_candidate_paths = [f"{src}:{dst}" for src, dst, _, _ in final_binds if src != host_home]
+        all_candidate_paths = [str(dst) for src, dst, _, _ in final_binds if src != host_home]
 
         agent_cmd, agent_dirs, agent_files = self._get_agent_setup(prompt, resume, all_candidate_paths, host_home)
 

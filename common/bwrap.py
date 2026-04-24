@@ -141,17 +141,7 @@ class BwrapSandbox(OdevFrameworkMixin):
 
     def _resolve_sandbox_dirs(self, sandbox_dirs: list[str]) -> list[tuple[Path, Path]]:
         """Parse sandbox_dirs entries into (host, guest) pairs."""
-        result = []
-        for s in sandbox_dirs:
-            if ":" in s:
-                host, guest = s.split(":", 1)
-                host_p = Path(host).resolve()
-                guest_p = Path(guest)
-            else:
-                host_p = Path(s).resolve()
-                guest_p = host_p
-            result.append((host_p, guest_p))
-        return result
+        return [(Path(s).resolve(), Path(s).resolve()) for s in sandbox_dirs]
 
     def _prepare_sandbox_config(
         self,
@@ -177,7 +167,7 @@ class BwrapSandbox(OdevFrameworkMixin):
                     # Type B — user workspace (primary, RW)
                     *[bind(host, guest, ro=False, primary=True) for host, guest in effective_sandbox_binds],
                     # Type B — extra dirs provided by the caller (RO)
-                    *[bind(e.split(":", 1)[0], e.split(":", 1)[1] if ":" in e else e) for e in (extra_bind_dirs or [])],
+                    *[bind(e) for e in (extra_bind_dirs or [])],
                     # Type A — odev infrastructure (parents are mounted before children, no dedup)
                     bind(self.odev.path),
                     bind(self.odev.home_path / "plugins"),

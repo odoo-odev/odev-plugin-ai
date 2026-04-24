@@ -224,7 +224,8 @@ class AICommandMixin:
             try:
                 if not worktree_path.exists():
                     self.odev.run_command("worktree", "-C", version, "-V", version)
-                self.odev.run_command("pull", "-V", version)
+                if self.odev.config.repositories.is_pull_needed(version):
+                    self.odev.run_command("pull", "-V", version)
             except Exception as e:
                 logger.warning(f"Could not prepare Odoo {version} environment: {e}")
             available[version] = worktree_path.exists()

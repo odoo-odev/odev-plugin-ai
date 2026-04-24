@@ -68,4 +68,4 @@ class BaseAgentHandler:
         raise NotImplementedError()
 
     def _guest_paths(self, all_candidate_paths: list[str]) -> list[str]:
-        return [d.split(":", 1)[1] if ":" in d else d for d in all_candidate_paths]
+        return all_candidate_paths
