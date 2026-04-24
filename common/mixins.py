@@ -10,6 +10,7 @@ if TYPE_CHECKING:
     from odev.common.console import Console
 
 import shutil
+import subprocess
 from pathlib import Path
 
 from odev.common import args
@@ -275,6 +276,16 @@ class AICommandMixin:
 
         return [str(target_dir)]
 
+    def _get_loaded_skills(self) -> list[str]:
+        """Check loaded skills using npx skills list -g."""
+        try:
+            result = subprocess.run(["npx", "skills", "list", "-g"], capture_output=True, text=True, check=False)
+            if result.returncode == 0:
+                return [line.strip() for line in result.stdout.splitlines() if line.strip()]
+        except Exception:
+            pass
+        return []
+
     def run_ai_agent(
         self,
         prompt: str,
@@ -290,6 +301,14 @@ class AICommandMixin:
                 database = None
 
         agent = self.get_ai_agent()
+
+        # Check for missing odev skill via npx skills list -g
+        loaded_skills = self._get_loaded_skills()
+        if "odev" not in loaded_skills:
+            logger.warning(
+                "The 'odev' skill is missing. For a better experience, you can load it by running:\n"
+                "npx skills add odoo-ps/ps-ai-skills --skills odev"
+            )
 
         return agent.run(
             prompt,

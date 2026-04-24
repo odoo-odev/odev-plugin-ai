@@ -337,14 +337,12 @@ class BwrapSandbox(OdevFrameworkMixin):
             if ":" in d:
                 trusted_paths.append(d.split(":")[1])
 
-        if skill_target := self.handler.get_skill_target():
-            rel_dir, _md_filename = skill_target
+        if rel_dir := self.handler.get_agent_config_rel_path():
             is_persistent = rel_dir in persistent_dirs
             target_dir = (host_home / rel_dir) if is_persistent else (playground / rel_dir)
             if not is_persistent:
                 target_dir.mkdir(parents=True, exist_ok=True)
 
-            self.handler.inject_skills(target_dir)
             self.handler.inject_trust(target_dir, trusted_paths)
             self.handler.cleanup_junk(target_dir)
 
