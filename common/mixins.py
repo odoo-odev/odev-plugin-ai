@@ -277,11 +277,19 @@ class AICommandMixin:
         return [str(target_dir)]
 
     def _get_loaded_skills(self) -> list[str]:
-        """Check loaded skills using npx skills list -g."""
+        """Check loaded skills using npx skills list -g --json."""
         try:
-            result = subprocess.run(["npx", "skills", "list", "-g"], capture_output=True, text=True, check=False)
+            import json
+
+            result = subprocess.run(
+                ["npx", "skills", "list", "-g", "--json"],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
             if result.returncode == 0:
-                return [line.strip() for line in result.stdout.splitlines() if line.strip()]
+                data = json.loads(result.stdout)
+                return [s["name"] for s in data if "name" in s]
         except Exception:
             pass
         return []

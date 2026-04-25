@@ -1,4 +1,5 @@
 import json
+import os
 import tempfile
 from pathlib import Path
 
@@ -49,6 +50,8 @@ class AgentCLI(BwrapSandbox):
             host_home / ".local",
             host_home / ".config" / "rtk",
             host_home / ".claude",
+            host_home / ".agents",
+            host_home / ".antigravity",
         ]
         agent_files = [
             host_home / ".gitconfig",
@@ -180,7 +183,7 @@ class AgentCLI(BwrapSandbox):
             host_home.name,
             "--setenv",
             "XDG_RUNTIME_DIR",
-            "/run/user/1000",
+            f"/run/user/{os.getuid()}",
             "--setenv",
             "SHELL",
             "/bin/bash",

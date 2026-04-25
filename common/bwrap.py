@@ -23,7 +23,7 @@ def _check_bwrap_support():
     try:
         # Try a minimal bwrap command that requires user namespaces
         subprocess.run(
-            ["bwrap", "--unshare-user", "--true"],
+            ["bwrap", "--unshare-user", "--version"],
             capture_output=True,
             check=True,
             timeout=2,
@@ -233,6 +233,7 @@ class BwrapSandbox(OdevFrameworkMixin):
     def _add_system_binds(self, cmd, host_home, sandbox_tmp, cwd):
         """Add standard system and network-related binds to the command."""
         self._setup_chrome_wrapper(cmd, sandbox_tmp)
+        self._add_runtime_binds(cmd)
         cmd.extend(
             [
                 "--ro-bind",
@@ -253,6 +254,24 @@ class BwrapSandbox(OdevFrameworkMixin):
                 "--ro-bind-try",
                 "/etc/crypto-policies",
                 "/etc/crypto-policies",
+                "--ro-bind",
+                "/etc/alternatives",
+                "/etc/alternatives",
+                "--ro-bind-try",
+                "/opt/google/chrome",
+                "/opt/google/chrome",
+                "--ro-bind-try",
+                "/snap",
+                "/snap",
+                "--ro-bind-try",
+                "/etc/fonts",
+                "/etc/fonts",
+                "--ro-bind-try",
+                str(host_home / ".fonts"),
+                str(host_home / ".fonts"),
+                "--ro-bind-try",
+                str(host_home / ".local/share/fonts"),
+                str(host_home / ".local/share/fonts"),
                 "--symlink",
                 "../run/systemd/resolve/stub-resolv.conf",
                 "/etc/resolv.conf",
@@ -306,6 +325,22 @@ class BwrapSandbox(OdevFrameworkMixin):
                 "/etc/passwd",
             ]
         )
+
+    def _add_runtime_binds(self, cmd):
+        """Bind only necessary runtime sockets (IDE IPC) to the sandbox."""
+        uid = os.getuid()
+        runtime_dir = Path(f"/run/user/{uid}")
+        if runtime_dir.exists():
+            # Create the runtime directory in the sandbox
+            cmd.extend(["--dir", str(runtime_dir)])
+            # Bind IDE sockets (vscode, cursor, antigravity)
+            # Antigravity often uses vscode-*.sock for compatibility
+            for socket in runtime_dir.glob("vscode-*.sock"):
+                cmd.extend(["--bind-try", str(socket), str(socket)])
+            for socket in runtime_dir.glob("antigravity-*.sock"):
+                cmd.extend(["--bind-try", str(socket), str(socket)])
+            for socket in runtime_dir.glob("cursor-*.sock"):
+                cmd.extend(["--bind-try", str(socket), str(socket)])
 
     def _prepare_agent_config(  # noqa: C901
         self,
