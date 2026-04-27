@@ -17,12 +17,9 @@
 #         migration script is added.
 #         This number is reset to 0 when the minor version number is
 #         incremented.
-#
-# Version number should be incremented once and only once per pull request
-# or merged change.
 # ------------------------------------------------------------------------------
 
-__version__ = "1.0.1"
+__version__ = "1.0.2"
 
 # --- Dependencies -------------------------------------------------------------
 # List other odev plugins from which this current plugin depends.
