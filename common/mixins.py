@@ -66,7 +66,7 @@ class AICommandMixin:
 
     dirs = args.List(
         aliases=["-d", "--dirs"],
-        description="Comma-separated list of extra directories to include in the sandbox (read-only).",
+        description="Comma-separated list of extra directories to include in the sandbox (read-write).",
         default=[],
     )
 

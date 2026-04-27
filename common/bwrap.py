@@ -166,8 +166,8 @@ class BwrapSandbox(OdevFrameworkMixin):
                 [
                     # Type B — user workspace (primary, RW)
                     *[bind(host, guest, ro=False, primary=True) for host, guest in effective_sandbox_binds],
-                    # Type B — extra dirs provided by the caller (RO)
-                    *[bind(e) for e in (extra_bind_dirs or [])],
+                    # Type B — extra dirs provided by the caller (RW, now Primary)
+                    *[bind(e, ro=False, primary=True) for e in (extra_bind_dirs or [])],
                     # Type A — odev infrastructure (parents are mounted before children, no dedup)
                     bind(self.odev.path),
                     bind(self.odev.home_path / "plugins"),
