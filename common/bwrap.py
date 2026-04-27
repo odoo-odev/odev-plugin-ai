@@ -216,13 +216,49 @@ class BwrapSandbox(OdevFrameworkMixin):
 
         return None
 
-    def _setup_chrome_wrapper(self, cmd, sandbox_tmp):
+    def _provision_chrome(self) -> Path | None:
+        """Ensure a specific version of Chrome is available for tours."""
+        version = "145.0.7632.116"
+        base_path = self.odev.home_path / "browsers" / "chrome" / version
+
+        # Puppeteer structure: <base>/chrome/linux-<version>/chrome-linux64/chrome
+        executable = base_path / "chrome" / f"linux-{version}" / "chrome-linux64" / "chrome"
+
+        if not executable.exists():
+            logger.info(f"Provisioning Chrome {version} for tours...")
+            base_path.mkdir(parents=True, exist_ok=True)
+            try:
+                subprocess.run(
+                    [
+                        "npx",
+                        "-y",
+                        "@puppeteer/browsers",
+                        "install",
+                        f"chrome@{version}",
+                        "--path",
+                        str(base_path),
+                    ],
+                    check=True,
+                    capture_output=True,
+                )
+            except Exception as e:
+                logger.warning(f"Failed to provision Chrome {version}: {e}")
+                return None
+
+        return executable if executable.exists() else None
+
+    def _setup_chrome_wrapper(self, cmd, sandbox_tmp, chrome_bin=None):
         """Create a Chrome wrapper script in /tmp that injects rendering-consistency
         flags, then point ODOO_BROWSER_BIN at it so Odoo picks it up."""
         wrapper = sandbox_tmp / "odoo-chrome-wrapper"
+
+        search_bins = "google-chrome chromium chromium-browser google-chrome-stable"
+        if chrome_bin:
+            search_bins = f"{chrome_bin} {search_bins}"
+
         wrapper.write_text(
             "#!/bin/bash\n"
-            "for bin in google-chrome chromium chromium-browser google-chrome-stable; do\n"
+            f"for bin in {search_bins}; do\n"
             '    real=$(command -v "$bin" 2>/dev/null)\n'
             '    if [ -n "$real" ]; then\n'
             '        exec "$real" \\\n'
@@ -231,6 +267,7 @@ class BwrapSandbox(OdevFrameworkMixin):
             "            --disable-font-subpixel-positioning \\\n"
             "            --hide-scrollbars \\\n"
             "            --window-size=1366,768 \\\n"
+            "            --no-sandbox \\\n"
             '            "$@"\n'
             "    fi\n"
             "done\n"
@@ -242,7 +279,17 @@ class BwrapSandbox(OdevFrameworkMixin):
 
     def _add_system_binds(self, cmd, host_home, sandbox_tmp, cwd):
         """Add standard system and network-related binds to the command."""
-        self._setup_chrome_wrapper(cmd, sandbox_tmp)
+        chrome_exe = self._provision_chrome()
+        chrome_guest_bin = None
+        if chrome_exe:
+            # Bind the Chrome installation to /opt/google/chrome in the sandbox
+            # We bind the directory containing the binary and its paks/libs
+            chrome_dir = chrome_exe.parent
+            cmd.extend(["--ro-bind", str(chrome_dir), "/opt/google/chrome"])
+            chrome_guest_bin = "/opt/google/chrome/chrome"
+
+        self._setup_chrome_wrapper(cmd, sandbox_tmp, chrome_bin=chrome_guest_bin)
+        self._add_runtime_binds(cmd)
         cmd.extend(
             [
                 "--ro-bind",
@@ -263,6 +310,21 @@ class BwrapSandbox(OdevFrameworkMixin):
                 "--ro-bind-try",
                 "/etc/crypto-policies",
                 "/etc/crypto-policies",
+                "--ro-bind",
+                "/etc/alternatives",
+                "/etc/alternatives",
+                "--ro-bind-try",
+                "/snap",
+                "/snap",
+                "--ro-bind-try",
+                "/etc/fonts",
+                "/etc/fonts",
+                "--ro-bind-try",
+                str(host_home / ".fonts"),
+                str(host_home / ".fonts"),
+                "--ro-bind-try",
+                str(host_home / ".local/share/fonts"),
+                str(host_home / ".local/share/fonts"),
                 "--symlink",
                 "../run/systemd/resolve/stub-resolv.conf",
                 "/etc/resolv.conf",
@@ -316,6 +378,22 @@ class BwrapSandbox(OdevFrameworkMixin):
                 "/etc/passwd",
             ]
         )
+
+    def _add_runtime_binds(self, cmd):
+        """Bind only necessary runtime sockets (IDE IPC) to the sandbox."""
+        uid = os.getuid()
+        runtime_dir = Path(f"/run/user/{uid}")
+        if runtime_dir.exists():
+            # Create the runtime directory in the sandbox
+            cmd.extend(["--dir", str(runtime_dir)])
+            # Bind IDE sockets (vscode, cursor, antigravity)
+            # Antigravity often uses vscode-*.sock for compatibility
+            for socket in runtime_dir.glob("vscode-*.sock"):
+                cmd.extend(["--bind-try", str(socket), str(socket)])
+            for socket in runtime_dir.glob("antigravity-*.sock"):
+                cmd.extend(["--bind-try", str(socket), str(socket)])
+            for socket in runtime_dir.glob("cursor-*.sock"):
+                cmd.extend(["--bind-try", str(socket), str(socket)])
 
     def _prepare_agent_config(  # noqa: C901
         self,
