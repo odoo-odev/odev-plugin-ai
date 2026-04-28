@@ -170,7 +170,12 @@ class BwrapSandbox(OdevFrameworkMixin):
                     *[bind(e, ro=False, primary=True) for e in (extra_bind_dirs or [])],
                     # Type A — odev infrastructure (parents are mounted before children, no dedup)
                     bind(self.odev.path),
-                    bind(self.odev.home_path / "plugins"),
+                    bind(self.odev.plugins_path),
+                    # Resolve plugin symlink targets so Python can import them inside bwrap.
+                    # plugins_path contains symlinks (e.g. odev_plugin_ai -> /path/to/repo);
+                    # the symlink itself is visible via the plugins_path mount, but the target
+                    # directory must be separately mounted for Python imports to work.
+                    *[bind(p) for p in self.odev.plugins_path.iterdir() if p.is_symlink()],
                     # RW access is required for odev to perform git operations/worktree management
                     bind(self.odev.home_path / "worktrees", ro=False),
                     bind(self.odev.home_path / "virtualenvs", ro=False),

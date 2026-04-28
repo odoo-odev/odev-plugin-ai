@@ -7,15 +7,17 @@ whenever Odoo is started inside an AI bwrap sandbox (i.e., when AI_SANDBOX=1).
 
 import os
 
-if os.environ.get("AI_SANDBOX") == "1":
-    from odev.common import framework as _framework
-    from odev.plugins.odev_plugin_ai.common.odoobin import AI_OdoobinProcess
+if os.environ.get("AI_SANDBOX") == "1" or os.environ.get("ANTIGRAVITY_AGENT") == "1":
+    from odev.common.odev import Odev
+    from .common.odoobin import AI_OdoobinProcess
 
-    # framework may be None if accessed before init_framework(); use _framework
-    # module-level variable which is populated by the time plugins are loaded.
-    if _framework is not None:
-        _framework.odoobin_process_class = AI_OdoobinProcess
+    # Set at class level so it applies even if framework was created before this runs
+    Odev._odoobin_process_class = AI_OdoobinProcess
 
-        # Override update checks to skip them in the sandbox
-        _framework.check_release = lambda: None
-        _framework._should_update_now = lambda: False
+    # Also patch the existing instance for update-hook overrides
+    from odev import common as _common
+
+    if _common.framework is not None:
+        _common.framework.odoobin_process_class = AI_OdoobinProcess
+        _common.framework.check_release = lambda: None
+        _common.framework._should_update_now = lambda: False
