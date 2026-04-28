@@ -50,6 +50,75 @@ def _check_bwrap_support():
 class BwrapSandbox(OdevFrameworkMixin):
     """Manages a bwrap execution environment."""
 
+    @staticmethod
+    def _group_infra_items(items: list[tuple["Path", str]]) -> list[tuple[str, str]]:
+        """Sort and group infra paths by parent+mode for a compact display.
+
+        Paths that share the same parent directory *and* the same access mode
+        are collapsed into a single line:
+
+            /some/parent/{child_a, child_b} (RO)
+
+        Singletons are shown as-is. The final list is sorted alphabetically.
+        """
+        from collections import defaultdict
+
+        home = str(Path.home())
+
+        groups: dict[tuple[str, str], list[str]] = defaultdict(list)
+        for path, mode in items:
+            parent_str = str(path.parent)
+            if parent_str == home:
+                parent_str = "~"
+            elif parent_str.startswith(home + "/"):
+                parent_str = "~" + parent_str[len(home) :]
+
+            groups[(parent_str, mode)].append(path.name)
+
+        result: list[tuple[str, str]] = []
+        for (parent, mode), names in groups.items():
+            names_sorted = sorted(names)
+            if len(names_sorted) == 1:
+                path_str = f"{parent}/{names_sorted[0]}"
+            else:
+                path_str = f"{parent}/{{{', '.join(names_sorted)}}}"
+            result.append((path_str, mode))
+
+        return sorted(result, key=lambda x: x[0])
+
+    def _build_infra_items(
+        self,
+        binds: list[tuple[Path, Path, bool, bool]],
+        agent_dirs: list[Path],
+        agent_files: list[Path],
+        active_venv_path: Path | None,
+        odoo_filestore: Path | None,
+        string,
+    ) -> tuple[list[tuple[Path, str]], list[str]]:
+        """Build (infra_items, mapping_lines) for the infrastructure display section."""
+        infra_items: list[tuple[Path, str]] = []
+        mapping_lines: list[str] = []
+
+        for d in agent_dirs:
+            infra_items.append((d, "RW"))
+        for f in agent_files:
+            if f.exists():
+                infra_items.append((f, "RW"))
+        if odoo_filestore and odoo_filestore.exists():
+            infra_items.append((odoo_filestore, "RW"))
+        if active_venv_path:
+            infra_items.append((active_venv_path, "RO"))
+
+        for src, dst, ro, primary in binds:
+            if not primary:
+                mode = "RO" if ro else "RW"
+                if src == dst:
+                    infra_items.append((src, mode))
+                else:
+                    mapping_lines.append(f"{src} {string.stylize(f'-> {dst}', 'bold color.green')} ({mode})")
+
+        return infra_items, mapping_lines
+
     def __init__(
         self,
         cli: str,
@@ -73,6 +142,8 @@ class BwrapSandbox(OdevFrameworkMixin):
         database: str | None = None,
         db_user: str | None = None,
         ephemeral_pg: bool = True,
+        active_venv_path: Path | None = None,
+        odoo_filestore: Path | None = None,
     ) -> bool:
         """Display a warning message about the sandbox access and security risks."""
         if self.headless:
@@ -110,21 +181,20 @@ class BwrapSandbox(OdevFrameworkMixin):
                 f"The agent will be able to see and potentially access {string.stylize('ALL', 'bold')} your local databases."
             )
 
+        infra_items, mapping_lines = self._build_infra_items(
+            binds, agent_dirs, agent_files, active_venv_path, odoo_filestore, string
+        )
+
         console.print(f"\n{string.stylize('INFRASTRUCTURE & REFERENCE (System/Source/Config):', 'bold color.cyan')}")
-        for d in agent_dirs:
-            console.print(f" • {d} (RW)")
-        for f in agent_files:
-            if f.exists():
-                console.print(f" • {f} (RW)")
-        for src, dst, ro, primary in binds:
-            if not primary:
-                mode = "RO" if ro else "RW"
-                label = (
-                    f"{src} {string.stylize(f'-> {dst}', 'bold color.green')} ({mode})"
-                    if src != dst
-                    else f"{src} ({mode})"
-                )
-                console.print(f" • {label}")
+        for path, mode in self._group_infra_items(infra_items):
+            console.print(f" • {string.stylize(path, 'color.purple')} ({mode})")
+
+        home = str(Path.home())
+        for line in sorted(mapping_lines):
+            # Also replace home in mapping lines if present
+            if line.startswith(home):
+                line = "~" + line[len(home) :]
+            console.print(f" • {string.stylize(line, 'color.purple')}")
 
         if not self.yolo and not console.bypass_prompt:
             return console.confirm("Do you want to proceed with this AI agent execution?", default=True)
@@ -449,6 +519,8 @@ class BwrapSandbox(OdevFrameworkMixin):
         sandbox_tmp: Path,
         proxy_dir: Path,
         pg_data_dir: Path,
+        active_venv_path: Path | None = None,
+        odoo_filestore: Path | None = None,
     ) -> bool:
         """Final execution logic for the bwrap sandbox."""
         if not self._display_sandbox_warning(
@@ -458,6 +530,8 @@ class BwrapSandbox(OdevFrameworkMixin):
             database=database,
             db_user=db_user,
             ephemeral_pg=pg_process is not None,
+            active_venv_path=active_venv_path,
+            odoo_filestore=odoo_filestore,
         ):
             return False
 

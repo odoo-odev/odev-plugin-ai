@@ -257,6 +257,8 @@ class AgentCLI(BwrapSandbox):
             sandbox_tmp=sandbox_tmp,
             proxy_dir=proxy_dir,
             pg_data_dir=pg_data_dir,
+            active_venv_path=active_venv_path,
+            odoo_filestore=host_home / ".local" / "share" / "Odoo",
         )
 
     def get_latest_session_id(self) -> str | None:
