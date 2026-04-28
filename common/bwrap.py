@@ -2,6 +2,7 @@ import os
 import shlex
 import shutil
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 
@@ -179,6 +180,7 @@ class BwrapSandbox(OdevFrameworkMixin):
                     # RW access is required for odev to perform git operations/worktree management
                     bind(self.odev.home_path / "worktrees", ro=False),
                     bind(self.odev.home_path / "virtualenvs", ro=False),
+                    bind(sys.prefix),
                     *[bind(r.path, ro=False) for r in odoo_repositories(enterprise=True)],
                 ],
             )

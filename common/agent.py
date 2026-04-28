@@ -1,5 +1,6 @@
 import json
 import os
+import sys
 import tempfile
 from pathlib import Path
 
@@ -139,7 +140,7 @@ class AgentCLI(BwrapSandbox):
             )
         prompt = db_info + prompt
 
-        sandbox_path_items = []
+        sandbox_path_items = [str(Path(sys.prefix) / "bin")]
         if active_venv_path:
             sandbox_path_items.append(str(active_venv_path / "bin"))
 
