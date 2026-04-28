@@ -7,7 +7,7 @@ whenever Odoo is started inside an AI bwrap sandbox (i.e., when AI_SANDBOX=1).
 
 import os
 
-if os.environ.get("AI_SANDBOX") == "1" or os.environ.get("ANTIGRAVITY_AGENT") == "1":
+if os.environ.get("AI_SANDBOX") == "1":
     from odev.common.odev import Odev
     from .common.odoobin import AI_OdoobinProcess
 

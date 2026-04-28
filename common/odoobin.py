@@ -25,7 +25,7 @@ class AI_OdoobinProcess(OdoobinProcess):
 
     def get_stream_filter(self) -> Callable[[str], str | None] | None:
         """Return the AI sandbox log filter when running inside a sandbox."""
-        if os.environ.get("AI_SANDBOX") == "1" or os.environ.get("ANTIGRAVITY_AGENT") == "1":
+        if os.environ.get("AI_SANDBOX") == "1":
             return self._ai_sandbox_filter
         return None
 
