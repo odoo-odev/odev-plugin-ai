@@ -1,21 +1,27 @@
 import json
 import os
+import shutil
 import sys
 import tempfile
 from pathlib import Path
 
 from odev.common.logging import logging
+from odev.common.mixins.framework import OdevFrameworkMixin
 
-from .bwrap import BwrapSandbox
 from .handlers import get_agent_handler
 from .postgres import PostgresSandbox
+from .sandbox import ExecutionSpec, get_sandbox
 
 
 logger = logging.getLogger(__name__)
 
 
-class AgentCLI(BwrapSandbox):
-    """An execution wrapper for CLI AI agents (claude, gemini, copilot)."""
+class AgentCLI(OdevFrameworkMixin):
+    """An execution wrapper for CLI AI agents (claude, gemini, copilot).
+
+    Composes a platform-specific sandbox backend (bwrap on Linux,
+    sandbox-exec/Seatbelt on macOS) and an ephemeral PostgreSQL sandbox.
+    """
 
     def __init__(
         self,
@@ -24,17 +30,21 @@ class AgentCLI(BwrapSandbox):
         yolo: bool = False,
         headless: bool = False,
     ):
+        super().__init__()
         host_home = Path.home().resolve()
-        # Initialize the strategy handler for the specific agent
+
         from odev.common.odev import Odev
 
+        self.cli = cli
+        self.model = model
+        self.headless = headless
+        self.yolo = yolo or headless
         self.handler = get_agent_handler(cli, host_home, Odev())
-
-        super().__init__(
+        self.sandbox = get_sandbox(
             cli=cli,
             handler=self.handler,
             model=model,
-            yolo=yolo,
+            yolo=self.yolo,
             headless=headless,
         )
 
@@ -58,7 +68,6 @@ class AgentCLI(BwrapSandbox):
             host_home / ".gitconfig",
         ]
 
-        # Add agent-specific directories/files from the handler
         for d in self.handler.get_config_dirs():
             agent_dirs.append(host_home / d)
         for f in self.handler.get_config_files():
@@ -86,6 +95,53 @@ class AgentCLI(BwrapSandbox):
 
         return agent_cmd, agent_dirs, agent_files
 
+    def _build_env(
+        self,
+        host_home: Path,
+        sandbox_path: str,
+        database: str | None,
+    ) -> dict[str, str]:
+        """Build the platform-agnostic env dict to inject into the sandbox."""
+        env: dict[str, str] = {
+            "HOME": str(host_home),
+            "USER": host_home.name,
+            "SHELL": "/bin/bash",
+            "LANG": os.environ.get("LANG", "en_US.UTF-8"),
+            "PYTHONPATH": str(self.odev.path),
+            "PATH": sandbox_path,
+            "ODEV_NO_SSH_AGENT": "1",
+            "ODEV_SKIP_GIT_UPDATE": "1",
+            "AI_SANDBOX": "1",
+        }
+        if database:
+            env["PGDATABASE"] = database
+        return env
+
+    def _build_sandbox_path(self, active_venv_path: Path | None, host_home: Path) -> str:
+        """Compose the PATH used inside the sandbox so the agent finds tools."""
+        items = [str(Path(sys.prefix) / "bin")]
+        if active_venv_path:
+            items.append(str(active_venv_path / "bin"))
+
+        # Make 'node' inside the sandbox match 'node' on the host (NVM-aware).
+        host_node = shutil.which("node")
+        if host_node:
+            node_bin_dir = str(Path(host_node).parent)
+            if node_bin_dir not in items:
+                items.append(node_bin_dir)
+
+        items.extend(
+            [
+                str(host_home / ".npm-global" / "bin"),
+                str(host_home / ".local" / "bin"),
+            ]
+        )
+        if sys.platform == "darwin":
+            items.extend(["/opt/homebrew/bin", "/opt/homebrew/sbin", "/usr/local/bin", "/usr/local/sbin"])
+        items.extend(["/usr/local/bin", "/usr/bin", "/bin"])
+        # Deduplicate while preserving order
+        return ":".join(dict.fromkeys(items))
+
     def run(
         self,
         prompt: str,
@@ -98,14 +154,18 @@ class AgentCLI(BwrapSandbox):
         ephemeral_pg: bool = True,
         cwd: str | None = None,
     ) -> bool:
-        """Run the AI agent within a bwrap sandbox."""
+        """Run the AI agent within the platform-appropriate sandbox."""
+        # Reap any leftover ephemeral postgres clusters / sandbox tmp dirs
+        # from previous Ctrl+C'd or crashed runs before we start fresh ones.
+        PostgresSandbox.cleanup_orphans()
+
         host_home = Path.home().resolve()
         playground = Path(tempfile.mkdtemp(prefix=f"odev-ai-{self.cli}-"))
         sandbox_tmp = Path(tempfile.mkdtemp(prefix=f"odev-ai-tmp-{self.cli}-"))
         proxy_dir = Path(tempfile.mkdtemp(prefix="odev-ai-pg-"))
         pg_data_dir = Path(tempfile.mkdtemp(prefix="odev-ai-pgdata-"))
 
-        sandbox_data = self._prepare_sandbox_config(
+        sandbox_data = self.sandbox.prepare_sandbox_config(
             sandbox_dirs=sandbox_dirs,
             extra_bind_dirs=extra_bind_dirs,
             database=database,
@@ -115,7 +175,6 @@ class AgentCLI(BwrapSandbox):
         active_venv_path = sandbox_data["active_venv_path"]
 
         if not cwd:
-            # Default to the primary workspace bind or home
             primary_bind = next((b for b in final_binds if b[3]), None)
             cwd = str(primary_bind[1]) if primary_bind else str(host_home)
 
@@ -140,124 +199,38 @@ class AgentCLI(BwrapSandbox):
             )
         prompt = db_info + prompt
 
-        sandbox_path_items = [str(Path(sys.prefix) / "bin")]
-        if active_venv_path:
-            sandbox_path_items.append(str(active_venv_path / "bin"))
+        sandbox_path = self._build_sandbox_path(active_venv_path, host_home)
+        env = self._build_env(host_home, sandbox_path, database)
+        secrets = self._setup_github_token()
 
-        # Add the directory containing the current host node to the sandbox path.
-        # This ensures that if the user is using NVM, 'node' inside the sandbox
-        # matches 'node' outside.
-        import shutil
-
-        host_node = shutil.which("node")
-        if host_node:
-            node_bin_dir = str(Path(host_node).parent)
-            if node_bin_dir not in sandbox_path_items:
-                sandbox_path_items.append(node_bin_dir)
-
-        sandbox_path_items.extend(
-            [
-                str(host_home / ".npm-global" / "bin"),
-                str(host_home / ".local" / "bin"),
-                "/usr/local/bin",
-                "/usr/bin",
-                "/bin",
-            ]
-        )
-        sandbox_path = ":".join(sandbox_path_items)
-
-        odev_path = self.odev.path
-        cmd = [
-            "bwrap",
-            "--dir",
-            "/home",
-            "--dir",
-            str(host_home),
-            "--bind",
-            str(playground),
-            str(host_home),
-            "--setenv",
-            "HOME",
-            str(host_home),
-            "--setenv",
-            "USER",
-            host_home.name,
-            "--setenv",
-            "XDG_RUNTIME_DIR",
-            f"/run/user/{os.getuid()}",
-            "--setenv",
-            "SHELL",
-            "/bin/bash",
-            "--setenv",
-            "LANG",
-            "en_US.UTF-8",
-            "--setenv",
-            "PYTHONPATH",
-            str(odev_path),
-            "--setenv",
-            "PATH",
-            sandbox_path,
-            "--setenv",
-            "ODEV_NO_SSH_AGENT",
-            "1",
-            "--setenv",
-            "ODEV_SKIP_GIT_UPDATE",
-            "1",
-            "--setenv",
-            "AI_SANDBOX",
-            "1",
-        ]
-
-        secrets_to_set = self._setup_github_token()
-        if database:
-            cmd.extend(["--setenv", "PGDATABASE", database])
-
-        top_dirs = {
-            "/home",
-            "/tmp",
-            "/dev",
-            "/proc",
-            "/sys",
-            "/run",
-            "/etc",
-            "/var",
-            "/usr",
-            "/bin",
-            "/sbin",
-            "/lib",
-            "/lib64",
-        }
-        for _, dst, _, _ in final_binds:
-            if dst.is_absolute():
-                td = f"/{dst.parts[1]}"
-                if td not in top_dirs:
-                    cmd.extend(["--dir", td])
-                    top_dirs.add(td)
-
-        self._prepare_odev_config(playground, host_home)
-        self._add_system_binds(cmd, host_home, sandbox_tmp, cwd)
-
+        # Set up ephemeral PG (or pass-through to host PG) before the agent runs
         pg_sandbox = PostgresSandbox(headless=self.headless)
-        pg_process = pg_sandbox.setup(cmd, database, proxy_dir, pg_data_dir, ephemeral=ephemeral_pg)
+        pg_process = pg_sandbox.setup(
+            database=database,
+            proxy_dir=proxy_dir,
+            pg_data_dir=pg_data_dir,
+            ephemeral=ephemeral_pg,
+        )
 
-        self._apply_final_bindings(cmd, agent_dirs, agent_files, final_binds, host_home, playground)
-        self._prepare_agent_config(playground, all_candidate_paths, host_home)
-
-        cmd.extend(["--", *agent_cmd])
-        return self._execute_sandbox(
-            cmd=cmd,
+        spec = ExecutionSpec(
+            agent_cmd=agent_cmd,
+            final_binds=final_binds,
             agent_dirs=agent_dirs,
             agent_files=agent_files,
-            final_binds=final_binds,
-            database=database,
-            db_user=db_user,
-            secrets_to_set=secrets_to_set,
-            pg_process=pg_process,
+            env=env,
+            secrets=secrets,
+            cwd=cwd,
             playground=playground,
             sandbox_tmp=sandbox_tmp,
             proxy_dir=proxy_dir,
             pg_data_dir=pg_data_dir,
+            database=database,
+            db_user=db_user,
+            pg_process=pg_process,
+            active_venv_path=active_venv_path,
         )
+
+        return self.sandbox.execute(spec)
 
     def get_latest_session_id(self) -> str | None:
         """Return the ID of the most recent session for this agent CLI."""

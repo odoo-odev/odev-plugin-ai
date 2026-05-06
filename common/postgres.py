@@ -1,6 +1,9 @@
+import os
 import re
 import shutil
+import signal
 import subprocess
+import tempfile
 import time
 from pathlib import Path
 
@@ -11,8 +14,90 @@ from odev.common.mixins.framework import OdevFrameworkMixin
 logger = logging.getLogger(__name__)
 
 
+# Anything we mkdtemp() in agent.run() / postgres setup starts with this:
+_ORPHAN_DIR_PREFIX = "odev-ai-"
+
+# Skip dirs younger than this many seconds — protects concurrent `odev ai` runs
+# from killing each other. A real launch passes this threshold within a minute.
+_ORPHAN_MIN_AGE_SECONDS = 5 * 60
+
+
 class PostgresSandbox(OdevFrameworkMixin):
     """Manages an ephemeral PostgreSQL sandbox database."""
+
+    @classmethod
+    def cleanup_orphans(cls) -> None:
+        """Reap leftover ephemeral postgres clusters and tmp dirs from previous
+        crashed `odev ai` runs.
+
+        Each ephemeral cluster writes a `postmaster.pid` file into its data
+        dir. If a previous run was Ctrl+C'd or otherwise terminated abnormally,
+        the postgres backend may still be running and several `odev-ai-*`
+        directories may linger in `/tmp` / `$TMPDIR`. This routine kills the
+        postgres process group (when applicable) and removes the dirs. Only
+        dirs older than `_ORPHAN_MIN_AGE_SECONDS` are touched to avoid racing
+        with a concurrently-running `odev ai`.
+        """
+        scan_dirs: list[Path] = []
+        if v := os.environ.get("TMPDIR"):
+            scan_dirs.append(Path(v))
+        scan_dirs.extend([Path("/tmp"), Path(tempfile.gettempdir())])
+
+        cutoff = time.time() - _ORPHAN_MIN_AGE_SECONDS
+        seen: set[Path] = set()
+        for d in scan_dirs:
+            try:
+                resolved = d.resolve()
+            except OSError:
+                continue
+            if resolved in seen or not resolved.is_dir():
+                continue
+            seen.add(resolved)
+            try:
+                entries = list(resolved.iterdir())
+            except OSError:
+                continue
+            for entry in entries:
+                if not entry.is_dir() or not entry.name.startswith(_ORPHAN_DIR_PREFIX):
+                    continue
+                try:
+                    if entry.stat().st_mtime > cutoff:
+                        continue
+                except OSError:
+                    continue
+                cls._reap_orphan_dir(entry)
+
+    @staticmethod
+    def _reap_orphan_dir(orphan: Path) -> None:
+        """Kill the postgres process group anchored in `orphan` and rm the dir."""
+        pid_file = orphan / "postmaster.pid"
+        if pid_file.exists():
+            try:
+                pid = int(pid_file.read_text().splitlines()[0].strip())
+                # postgres normally heads its own process group via -k.
+                # SIGTERM the group; SIGKILL on timeout.
+                try:
+                    os.killpg(os.getpgid(pid), signal.SIGTERM)
+                except (ProcessLookupError, PermissionError):
+                    pass
+                for _ in range(25):
+                    try:
+                        os.kill(pid, 0)
+                    except ProcessLookupError:
+                        break
+                    time.sleep(0.1)
+                else:
+                    try:
+                        os.killpg(os.getpgid(pid), signal.SIGKILL)
+                    except (ProcessLookupError, PermissionError):
+                        pass
+                logger.debug(f"Reaped orphan postgres at {orphan} (pid {pid})")
+            except (ValueError, OSError) as e:
+                logger.debug(f"Could not parse {pid_file}: {e}")
+        try:
+            shutil.rmtree(orphan)
+        except OSError as e:
+            logger.debug(f"Could not remove orphan dir {orphan}: {e}")
 
     def __init__(self, headless: bool = False):
         super().__init__()
@@ -24,81 +109,105 @@ class PostgresSandbox(OdevFrameworkMixin):
         if bin_path:
             return bin_path
 
-        # Try to match the version of psql if it is in PATH (common on Ubuntu)
+        for finder in (self._find_pg_bin_linux, self._find_pg_bin_macos):
+            found = finder(name)
+            if found:
+                return found
+        return name
+
+    def _find_pg_bin_linux(self, name: str) -> str | None:
+        """Look up `name` under standard Linux PostgreSQL install layouts."""
         psql_path = shutil.which("psql")
         if psql_path:
             try:
                 out = subprocess.check_output([psql_path, "--version"], text=True)
-                # psql (PostgreSQL) 16.1 -> major version 16
                 match = re.search(r"\(PostgreSQL\)\s+(\d+)", out)
                 if match:
-                    major = match.group(1)
-                    candidate = Path(f"/usr/lib/postgresql/{major}/bin/{name}")
+                    candidate = Path(f"/usr/lib/postgresql/{match.group(1)}/bin/{name}")
                     if candidate.exists():
                         return str(candidate)
             except Exception:
                 pass
 
-        # Fallback: search all versions in /usr/lib/postgresql and pick highest
         base = Path("/usr/lib/postgresql")
-        if base.exists():
-            # Get all version directories, sort numerically, pick highest
-            versions = []
-            for d in base.iterdir():
-                if d.is_dir():
-                    try:
-                        versions.append((float(d.name), d))
-                    except ValueError:
-                        pass
-            if versions:
-                versions.sort(reverse=True)
-                for _, v_dir in versions:
-                    candidate = v_dir / "bin" / name
-                    if candidate.exists():
-                        return str(candidate)
-        return name
+        if not base.exists():
+            return None
+        versions: list[tuple[float, Path]] = []
+        for d in base.iterdir():
+            if d.is_dir():
+                try:
+                    versions.append((float(d.name), d))
+                except ValueError:
+                    continue
+        for _, v_dir in sorted(versions, reverse=True):
+            candidate = v_dir / "bin" / name
+            if candidate.exists():
+                return str(candidate)
+        return None
+
+    def _find_pg_bin_macos(self, name: str) -> str | None:
+        """Look up `name` under standard macOS PostgreSQL install layouts."""
+        for brew_base in (Path("/opt/homebrew/opt"), Path("/usr/local/opt")):
+            if not brew_base.exists():
+                continue
+            try:
+                pg_dirs = sorted(brew_base.glob("postgresql@*"), key=lambda p: p.name, reverse=True)
+            except OSError:
+                pg_dirs = []
+            for d in pg_dirs:
+                candidate = d / "bin" / name
+                if candidate.exists():
+                    return str(candidate)
+            generic = brew_base / "postgresql" / "bin" / name
+            if generic.exists():
+                return str(generic)
+
+        pgapp = Path("/Applications/Postgres.app/Contents/Versions")
+        if pgapp.exists():
+            try:
+                versions = sorted(pgapp.iterdir(), key=lambda p: p.name, reverse=True)
+            except OSError:
+                versions = []
+            for v in versions:
+                candidate = v / "bin" / name
+                if candidate.exists():
+                    return str(candidate)
+        return None
 
     def setup(
         self,
-        cmd: list[str],
         database: str | None,
         proxy_dir: Path,
         pg_data_dir: Path,
         ephemeral: bool = True,
     ) -> subprocess.Popen | None:
-        """Initialize PostgreSQL cluster or proxy for the sandbox."""
+        """Initialize an ephemeral PostgreSQL cluster (and optionally clone a host DB).
+
+        The caller (an `AgentCLI` / `Sandbox` backend) is responsible for exposing
+        `proxy_dir` to the sandboxed process — for bwrap that means a `--bind`
+        onto `/var/run/postgresql`; for sandbox-exec it means allowlisting
+        `proxy_dir` and pointing `PGHOST` at it.
+        """
+        if not ephemeral:
+            return None
+
         # Discover host socket directory
-        for path in [Path("/var/run/postgresql"), Path("/tmp")]:
-            if any(path.glob(".s.PGSQL.*")):
-                host_socket_dir = path
-                break
-        else:
-            host_socket_dir = Path("/var/run/postgresql")
+        candidates = [
+            Path("/var/run/postgresql"),  # Linux package default
+            Path("/tmp"),                  # Homebrew default on macOS
+            Path("/private/tmp"),
+        ]
+        host_socket_dir = next((p for p in candidates if p.exists() and any(p.glob(".s.PGSQL.*"))), None)
 
-        if ephemeral:
-            pg_process = self._start_ephemeral_postgres(proxy_dir, pg_data_dir)
-            if pg_process:
-                if database and host_socket_dir and host_socket_dir.exists():
-                    cloned = self._clone_host_database(database, host_socket_dir, proxy_dir)
-                    if not cloned:
-                        logger.info(
-                            f"Host database {database!r} not found or could not be cloned; "
-                            "the AI agent will initialize it as needed."
-                        )
-
-                cmd.extend(
-                    [
-                        "--bind",
-                        str(proxy_dir),
-                        "/var/run/postgresql",
-                        "--symlink",
-                        "/var/run/postgresql/.s.PGSQL.5432",
-                        "/tmp/.s.PGSQL.5432",
-                    ]
+        pg_process = self._start_ephemeral_postgres(proxy_dir, pg_data_dir)
+        if pg_process and database and host_socket_dir is not None:
+            cloned = self._clone_host_database(database, host_socket_dir, proxy_dir)
+            if not cloned:
+                logger.info(
+                    f"Host database {database!r} not found or could not be cloned; "
+                    "the AI agent will initialize it as needed."
                 )
-            return pg_process
-
-        return None
+        return pg_process
 
     def _clone_host_database(self, database: str, host_socket_dir: Path, ephemeral_socket_dir: Path) -> bool:
         """Clone a host database into the ephemeral cluster.
@@ -194,9 +303,9 @@ class PostgresSandbox(OdevFrameworkMixin):
 
             # Start postgres listening ONLY on unix socket in socket_dir.
             # `start_new_session=True` makes the postgres backend its own
-            # process group leader so the caller can kill the whole tree
-            # via `os.killpg()` on cleanup — postgres forks worker backends
-            # that survive a plain SIGTERM to the leader otherwise.
+            # process group leader so we can kill the whole tree on cleanup
+            # via os.killpg() (postgres forks worker backends that survive a
+            # plain SIGTERM to the leader otherwise).
             process = subprocess.Popen(
                 [
                     self._get_pg_bin("postgres"),

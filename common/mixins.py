@@ -19,6 +19,7 @@ from odev.common.errors import CommandError
 from odev.common.logging import logging
 
 from odev.plugins.odev_plugin_ai.common.agent import AgentCLI
+from odev.plugins.odev_plugin_ai.common.sandbox import get_sandbox_class
 
 
 logger = logging.getLogger(__name__)
@@ -72,15 +73,22 @@ class AICommandMixin:
         default=[],
     )
 
+    def _ensure_sandbox_supported(self) -> None:
+        """Verify that this host can run the AI sandbox; raise otherwise."""
+        try:
+            sandbox_cls = get_sandbox_class()
+        except RuntimeError as e:
+            console.print(f"\n[bold red]Error:[/] {e}")
+            raise CommandError(str(e)) from e
+
+        supported, message = sandbox_cls.check_support()
+        if not supported:
+            console.print(f"\n[bold red]Error:[/] {message}")
+            raise CommandError("AI sandbox backend is not available on this host.")
+
     @staticmethod
     def _ensure_cli_installed(final_cli: str) -> None:
-        """Hard-fail with a helpful message if the chosen CLI isn't on PATH.
-
-        Without this check, the agent CLI is invoked inside the sandbox where
-        a missing binary surfaces only as an opaque "command not found" — or
-        worse, no output at all. Failing here keeps the user in a context
-        where they can still see the error.
-        """
+        """Hard-fail with a helpful message if the chosen CLI isn't on PATH."""
         if shutil.which(final_cli):
             return
         install_hints = {
@@ -101,6 +109,8 @@ class AICommandMixin:
 
         Handles favorite CLI selection and CLI-specific model favorites.
         """
+        self._ensure_sandbox_supported()
+
         all_clis = ["claude", "gemini", "copilot", "opencode-cli"]
         chosen_cli = self.args.cli
         favorite_cli = self.config.ai.favorite_cli
