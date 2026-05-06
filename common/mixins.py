@@ -33,6 +33,7 @@ class AICommandMixin:
         args: "Namespace"
         config: "Config"
         console: "Console"
+        _name: str
 
     cli = args.String(
         aliases=["--cli"],
@@ -282,7 +283,7 @@ class AICommandMixin:
             import json
 
             result = subprocess.run(
-                ["npx", "skills", "list", "-g", "--json"],
+                ["npx", "-y", "skills", "list", "-g", "--json"],
                 capture_output=True,
                 text=True,
                 check=False,
@@ -310,12 +311,20 @@ class AICommandMixin:
 
         agent = self.get_ai_agent()
 
-        # Check for missing odev skill via npx skills list -g
+        # Check for missing skills via npx skills list -g
         loaded_skills = self._get_loaded_skills()
+        missing_skills = []
         if "odev" not in loaded_skills:
+            missing_skills.append("odev")
+        if self._name == "test" and "test_skill" not in loaded_skills:
+            missing_skills.append("test_skill")
+
+        if missing_skills:
+            skills_str = " ".join(missing_skills)
             logger.warning(
-                "The 'odev' skill is missing. For a better experience, you can load it by running:\n"
-                "npx skills add odoo-ps/ps-ai-skills --skills odev"
+                f"The following skill(s) are missing: {', '.join(missing_skills)}. "
+                "For a better experience, you can load them by running:\n"
+                f"npx -y skills add odoo-ps/ps-ai-skills --skills {skills_str}"
             )
 
         return agent.run(
