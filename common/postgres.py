@@ -192,8 +192,11 @@ class PostgresSandbox(OdevFrameworkMixin):
                 capture_output=True,
             )
 
-            # Start postgres listening ONLY on unix socket in socket_dir
-            # We use port 5432 so client tools work by default
+            # Start postgres listening ONLY on unix socket in socket_dir.
+            # `start_new_session=True` makes the postgres backend its own
+            # process group leader so the caller can kill the whole tree
+            # via `os.killpg()` on cleanup — postgres forks worker backends
+            # that survive a plain SIGTERM to the leader otherwise.
             process = subprocess.Popen(
                 [
                     self._get_pg_bin("postgres"),
@@ -212,6 +215,7 @@ class PostgresSandbox(OdevFrameworkMixin):
                 ],
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
+                start_new_session=True,
             )
 
             # Wait for socket to be ready
