@@ -14,6 +14,8 @@ import subprocess
 from pathlib import Path
 
 from odev.common import args
+from odev.common.console import console
+from odev.common.errors import CommandError
 from odev.common.logging import logging
 
 from odev.plugins.odev_plugin_ai.common.agent import AgentCLI
@@ -70,6 +72,30 @@ class AICommandMixin:
         default=[],
     )
 
+    @staticmethod
+    def _ensure_cli_installed(final_cli: str) -> None:
+        """Hard-fail with a helpful message if the chosen CLI isn't on PATH.
+
+        Without this check, the agent CLI is invoked inside the sandbox where
+        a missing binary surfaces only as an opaque "command not found" — or
+        worse, no output at all. Failing here keeps the user in a context
+        where they can still see the error.
+        """
+        if shutil.which(final_cli):
+            return
+        install_hints = {
+            "claude": "  npm install -g @anthropic-ai/claude-code",
+            "gemini": "  npm install -g @google/gemini-cli",
+            "copilot": "  gh extension install github/gh-copilot",
+            "opencode-cli": "  npm install -g opencode-cli",
+        }
+        hint = install_hints.get(final_cli, "")
+        console.print(
+            f"\n[bold red]Error:[/] AI CLI '{final_cli}' is not installed (not found in PATH).\n"
+            + (f"Install it with:\n{hint}\n" if hint else "")
+        )
+        raise CommandError(f"AI CLI '{final_cli}' is not installed.")
+
     def get_ai_agent(self) -> AgentCLI:
         """Initialize and return an AgentCLI instance based on command arguments.
 
@@ -111,6 +137,7 @@ class AICommandMixin:
                 favorite_cli = chosen_cli
 
         final_cli = chosen_cli or favorite_cli or "claude"
+        self._ensure_cli_installed(final_cli)
 
         chosen_model = self.args.model
         favorite_model = self.config.ai.get_favorite_model(final_cli)
