@@ -115,9 +115,15 @@ class AgentCLI(BwrapSandbox):
         active_venv_path = sandbox_data["active_venv_path"]
 
         if not cwd:
-            # Default to the primary workspace bind or home
-            primary_bind = next((b for b in final_binds if b[3]), None)
-            cwd = str(primary_bind[1]) if primary_bind else str(host_home)
+            # Prioritize the first directory in sandbox_dirs (the main project path)
+            if sandbox_dirs:
+                main_path = Path(sandbox_dirs[0]).resolve()
+                primary_bind = next((b for b in final_binds if b[0] == main_path), None)
+                cwd = str(primary_bind[1]) if primary_bind else str(main_path)
+            else:
+                # Fallback to the first primary bind or home
+                primary_bind = next((b for b in final_binds if b[3]), None)
+                cwd = str(primary_bind[1]) if primary_bind else str(host_home)
 
         # Candidate paths for trustedDirectories and --add-dir inclusion
         all_candidate_paths = [str(dst) for src, dst, _, _ in final_binds if src != host_home]
@@ -129,8 +135,9 @@ class AgentCLI(BwrapSandbox):
 
         if database:
             db_info = (
-                f"(Environment: You have been granted access to a private, isolated CLONE of the host database '{database}'. "
-                "This is a separate, ephemeral PostgreSQL cluster. You can safely modify it as it "
+                f"(Environment: You have been granted access to a private, isolated PostgreSQL database named '{database}'. "
+                f"If the host database '{database}' exists, it has been cloned into this ephemeral cluster. "
+                "Otherwise it is an empty database. You can safely modify it as it "
                 "does not affect the live host data. Use 'psql' to work directly with it.)\n\n"
             )
         else:
@@ -238,7 +245,13 @@ class AgentCLI(BwrapSandbox):
         self._add_system_binds(cmd, host_home, sandbox_tmp, cwd)
 
         pg_sandbox = PostgresSandbox(headless=self.headless)
-        pg_process = pg_sandbox.setup(cmd, database, proxy_dir, pg_data_dir, ephemeral=ephemeral_pg)
+        pg_process = pg_sandbox.setup(
+            cmd,
+            database,
+            proxy_dir,
+            pg_data_dir,
+            ephemeral=ephemeral_pg,
+        )
 
         self._apply_final_bindings(cmd, agent_dirs, agent_files, final_binds, host_home, playground)
         self._prepare_agent_config(playground, all_candidate_paths, host_home)
@@ -259,6 +272,7 @@ class AgentCLI(BwrapSandbox):
             pg_data_dir=pg_data_dir,
             active_venv_path=active_venv_path,
             odoo_filestore=host_home / ".local" / "share" / "Odoo",
+            primary_dirs=[Path(d) for d in sandbox_dirs],
         )
 
     def get_latest_session_id(self) -> str | None:

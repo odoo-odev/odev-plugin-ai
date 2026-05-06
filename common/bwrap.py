@@ -144,6 +144,7 @@ class BwrapSandbox(OdevFrameworkMixin):
         ephemeral_pg: bool = True,
         active_venv_path: Path | None = None,
         odoo_filestore: Path | None = None,
+        primary_dirs: list[Path] | None = None,
     ) -> bool:
         """Display a warning message about the sandbox access and security risks."""
         if self.headless:
@@ -159,10 +160,22 @@ class BwrapSandbox(OdevFrameworkMixin):
         console.print("The agent can read/write files and access the database within this sandbox.")
 
         console.print(f"\n{string.stylize('PRIMARY WORKSPACES (Read-Write Access):', 'bold color.cyan')}")
-        for src, dst, _ro, primary in binds:
-            if primary:
-                label = f"{src} {string.stylize(f'-> {dst}', 'bold color.green')}" if src != dst else str(src)
-                console.print(f" • {label}")
+        primary_binds = [b for b in binds if b[3]]
+        if primary_dirs:
+            # Sort primary binds so that the ones in primary_dirs come first, in their original order
+            primary_paths = [p.resolve() for p in primary_dirs]
+
+            def sort_key(b):
+                try:
+                    return primary_paths.index(b[0])
+                except ValueError:
+                    return len(primary_paths)
+
+            primary_binds.sort(key=sort_key)
+
+        for src, dst, _ro, _primary in primary_binds:
+            label = f"{src} {string.stylize(f'-> {dst}', 'bold color.green')}" if src != dst else str(src)
+            console.print(f" • {label}")
 
         console.print(f"\n{string.stylize('DATABASE ACCESS:', 'bold color.cyan')}")
         if database:
@@ -521,6 +534,7 @@ class BwrapSandbox(OdevFrameworkMixin):
         pg_data_dir: Path,
         active_venv_path: Path | None = None,
         odoo_filestore: Path | None = None,
+        primary_dirs: list[Path] | None = None,
     ) -> bool:
         """Final execution logic for the bwrap sandbox."""
         if not self._display_sandbox_warning(
@@ -532,6 +546,7 @@ class BwrapSandbox(OdevFrameworkMixin):
             ephemeral_pg=pg_process is not None,
             active_venv_path=active_venv_path,
             odoo_filestore=odoo_filestore,
+            primary_dirs=primary_dirs,
         ):
             return False
 
