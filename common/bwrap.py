@@ -634,8 +634,8 @@ class BwrapSandbox(OdevFrameworkMixin):
                 full_cmd = f"bwrap --args 3 {cmd_str} 3<{shlex.quote(f.name)}"
                 logger.debug(f"Running sandbox command: {full_cmd}")
 
-                # Use bash.run to grant the command raw TTY access, supporting TUIs natively.
-                bash.run(full_cmd)
+                # Run bwrap inheriting sys.stdin so the agent can be interactive
+                subprocess.run(full_cmd, shell=True, check=True)
         except subprocess.CalledProcessError as error:
             returncode = error.returncode
             # If bwrap failed, run diagnostic
