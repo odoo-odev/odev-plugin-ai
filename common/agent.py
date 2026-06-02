@@ -63,8 +63,8 @@ class AgentCLI(BwrapSandbox):
         for f in self.handler.get_config_files():
             agent_files.append(host_home / f)
 
-        # Node.js managers (NVM, n, asdf) and npm
-        for node_dir in [".nvm", ".n", ".asdf", ".npm"]:
+        # Node.js managers (NVM, n, asdf)
+        for node_dir in [".nvm", ".n", ".asdf"]:
             p = host_home / node_dir
             if p.exists():
                 agent_dirs.append(p)
@@ -142,7 +142,7 @@ class AgentCLI(BwrapSandbox):
                 cwd = str(primary_bind[1]) if primary_bind else str(host_home)
 
         # Candidate paths for trustedDirectories and --add-dir inclusion
-        all_candidate_paths = [str(dst) for src, dst, _, _ in final_binds if src != host_home]
+        all_candidate_paths = [str(dst) for src, dst, _, primary in final_binds if src != host_home and primary]
 
         agent_cmd, agent_dirs, agent_files = self._get_agent_setup(prompt, resume, all_candidate_paths, host_home)
 
@@ -256,6 +256,17 @@ class AgentCLI(BwrapSandbox):
                 if td not in top_dirs:
                     cmd.extend(["--dir", td])
                     top_dirs.add(td)
+
+        # Pre-create system bind points in playground
+        for path_suffix in [
+            ".fonts",
+            ".local/share/fonts",
+            ".npm-global",
+            ".local/bin",
+            ".local/share/Odoo",
+            ".local/share/claude",
+        ]:
+            (playground / path_suffix).mkdir(parents=True, exist_ok=True)
 
         self._prepare_odev_config(playground, host_home)
         self._add_system_binds(cmd, host_home, sandbox_tmp, cwd)
