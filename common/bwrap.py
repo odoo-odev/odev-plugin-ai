@@ -210,7 +210,25 @@ class BwrapSandbox(OdevFrameworkMixin):
             console.print(f" • {string.stylize(line, 'color.purple')}")
 
         if not self.yolo and not console.bypass_prompt:
-            return console.confirm("Do you want to proceed with this AI agent execution?", default=True)
+            agent_names = {
+                "claude": ("Claude", "claude"),
+                "gemini": ("Gemini", "gemini"),
+                "copilot": ("Copilot", "copilot"),
+                "opencode-cli": ("OpenCode", "opencode"),
+            }
+            name, style_class = agent_names.get(self.cli, (self.cli, "question"))
+            
+            if self.model and self.model != "auto":
+                display_name = f"{name} ({self.model})"
+            else:
+                display_name = name
+
+            message = [
+                ("class:question", "Do you want to proceed with the "),
+                (f"class:{style_class}", display_name),
+                ("class:question", " AI agent execution?"),
+            ]
+            return console.confirm(message, default=True)
         return True
 
     def _prepare_odev_config(self, playground, host_home):
