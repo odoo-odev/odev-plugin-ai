@@ -14,9 +14,12 @@ import subprocess
 from pathlib import Path
 
 from odev.common import args
+from odev.common.console import console
+from odev.common.errors import CommandError
 from odev.common.logging import logging
 
 from odev.plugins.odev_plugin_ai.common.agent import AgentCLI
+from odev.plugins.odev_plugin_ai.common.sandbox import get_sandbox_class
 
 
 logger = logging.getLogger(__name__)
@@ -70,11 +73,44 @@ class AICommandMixin:
         default=[],
     )
 
+    def _ensure_sandbox_supported(self) -> None:
+        """Verify that this host can run the AI sandbox; raise otherwise."""
+        try:
+            sandbox_cls = get_sandbox_class()
+        except RuntimeError as e:
+            console.print(f"\n[bold red]Error:[/] {e}")
+            raise CommandError(str(e)) from e
+
+        supported, message = sandbox_cls.check_support()
+        if not supported:
+            console.print(f"\n[bold red]Error:[/] {message}")
+            raise CommandError("AI sandbox backend is not available on this host.")
+
+    @staticmethod
+    def _ensure_cli_installed(final_cli: str) -> None:
+        """Hard-fail with a helpful message if the chosen CLI isn't on PATH."""
+        if shutil.which(final_cli):
+            return
+        install_hints = {
+            "claude": "  npm install -g @anthropic-ai/claude-code",
+            "gemini": "  npm install -g @google/gemini-cli",
+            "copilot": "  gh extension install github/gh-copilot",
+            "opencode-cli": "  npm install -g opencode-cli",
+        }
+        hint = install_hints.get(final_cli, "")
+        console.print(
+            f"\n[bold red]Error:[/] AI CLI '{final_cli}' is not installed (not found in PATH).\n"
+            + (f"Install it with:\n{hint}\n" if hint else "")
+        )
+        raise CommandError(f"AI CLI '{final_cli}' is not installed.")
+
     def get_ai_agent(self) -> AgentCLI:
         """Initialize and return an AgentCLI instance based on command arguments.
 
         Handles favorite CLI selection and CLI-specific model favorites.
         """
+        self._ensure_sandbox_supported()
+
         all_clis = ["claude", "gemini", "copilot", "opencode-cli"]
         chosen_cli = self.args.cli
         favorite_cli = self.config.ai.favorite_cli
@@ -111,6 +147,7 @@ class AICommandMixin:
                 favorite_cli = chosen_cli
 
         final_cli = chosen_cli or favorite_cli or "claude"
+        self._ensure_cli_installed(final_cli)
 
         chosen_model = self.args.model
         favorite_model = self.config.ai.get_favorite_model(final_cli)
