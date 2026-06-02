@@ -11,6 +11,9 @@ class CopilotHandler(BaseAgentHandler):
     def get_creds_files(self):
         return ["config.json", "hosts.json", "hosts.yml", "config.yml"]
 
+    def get_agent_config_rel_path(self):
+        return ".copilot"
+
     def get_command(self, prompt, resume, all_candidate_paths, model, headless, yolo):
         cmd = ["copilot"]
         if prompt:

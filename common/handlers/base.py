@@ -28,25 +28,13 @@ class BaseAgentHandler:
         """Return names of credential files to copy if not persistent."""
         return []
 
-    def get_skill_target(self):
-        """Return (rel_dir, md_filename) if this agent supports skill injection."""
+    def get_agent_config_rel_path(self):
+        """Return the relative path to the agent's main configuration directory."""
         return None
 
     def get_global_config_name(self):
         """Return name of global config file (e.g. .claude.json)."""
         return None
-
-    def inject_skills(self, target_dir):
-        """Inject skills into the agent's context."""
-
-    def get_enabled_skills(self):
-        """Return a list of enabled Skill objects."""
-        from odev.plugins.odev_plugin_ai.common.skills import SkillManager
-
-        manager = SkillManager(self.odev)
-        available = manager.list_available_skills()
-        disabled = self.odev.config.skills.disabled
-        return [s for s in available if s.name not in disabled]
 
     def inject_trust(self, target_dir, trusted_paths):
         """Inject trusted paths into the agent's config."""
@@ -68,4 +56,4 @@ class BaseAgentHandler:
         raise NotImplementedError()
 
     def _guest_paths(self, all_candidate_paths: list[str]) -> list[str]:
-        return [d.split(":", 1)[1] if ":" in d else d for d in all_candidate_paths]
+        return all_candidate_paths

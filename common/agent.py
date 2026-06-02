@@ -1,4 +1,6 @@
 import json
+import os
+import sys
 import tempfile
 from pathlib import Path
 
@@ -49,6 +51,8 @@ class AgentCLI(BwrapSandbox):
             host_home / ".local",
             host_home / ".config" / "rtk",
             host_home / ".claude",
+            host_home / ".agents",
+            host_home / ".antigravity",
         ]
         agent_files = [
             host_home / ".gitconfig",
@@ -116,7 +120,7 @@ class AgentCLI(BwrapSandbox):
             cwd = str(primary_bind[1]) if primary_bind else str(host_home)
 
         # Candidate paths for trustedDirectories and --add-dir inclusion
-        all_candidate_paths = [f"{src}:{dst}" for src, dst, _, _ in final_binds if src != host_home]
+        all_candidate_paths = [str(dst) for src, dst, _, _ in final_binds if src != host_home]
 
         agent_cmd, agent_dirs, agent_files = self._get_agent_setup(prompt, resume, all_candidate_paths, host_home)
 
@@ -136,7 +140,7 @@ class AgentCLI(BwrapSandbox):
             )
         prompt = db_info + prompt
 
-        sandbox_path_items = []
+        sandbox_path_items = [str(Path(sys.prefix) / "bin")]
         if active_venv_path:
             sandbox_path_items.append(str(active_venv_path / "bin"))
 
@@ -180,7 +184,7 @@ class AgentCLI(BwrapSandbox):
             host_home.name,
             "--setenv",
             "XDG_RUNTIME_DIR",
-            "/run/user/1000",
+            f"/run/user/{os.getuid()}",
             "--setenv",
             "SHELL",
             "/bin/bash",

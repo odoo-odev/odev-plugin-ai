@@ -10,6 +10,7 @@ if TYPE_CHECKING:
     from odev.common.console import Console
 
 import shutil
+import subprocess
 from pathlib import Path
 
 from odev.common import args
@@ -65,7 +66,7 @@ class AICommandMixin:
 
     dirs = args.List(
         aliases=["-d", "--dirs"],
-        description="Comma-separated list of extra directories to include in the sandbox (read-only).",
+        description="Comma-separated list of extra directories to include in the sandbox (read-write).",
         default=[],
     )
 
@@ -224,7 +225,8 @@ class AICommandMixin:
             try:
                 if not worktree_path.exists():
                     self.odev.run_command("worktree", "-C", version, "-V", version)
-                self.odev.run_command("pull", "-V", version)
+                if self.odev.config.repositories.is_pull_needed(version):
+                    self.odev.run_command("pull", "-V", version)
             except Exception as e:
                 logger.warning(f"Could not prepare Odoo {version} environment: {e}")
             available[version] = worktree_path.exists()
@@ -274,6 +276,24 @@ class AICommandMixin:
 
         return [str(target_dir)]
 
+    def _get_loaded_skills(self) -> list[str]:
+        """Check loaded skills using npx skills list -g --json."""
+        try:
+            import json
+
+            result = subprocess.run(
+                ["npx", "skills", "list", "-g", "--json"],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            if result.returncode == 0:
+                data = json.loads(result.stdout)
+                return [s["name"] for s in data if "name" in s]
+        except Exception:
+            pass
+        return []
+
     def run_ai_agent(
         self,
         prompt: str,
@@ -289,6 +309,14 @@ class AICommandMixin:
                 database = None
 
         agent = self.get_ai_agent()
+
+        # Check for missing odev skill via npx skills list -g
+        loaded_skills = self._get_loaded_skills()
+        if "odev" not in loaded_skills:
+            logger.warning(
+                "The 'odev' skill is missing. For a better experience, you can load it by running:\n"
+                "npx skills add odoo-ps/ps-ai-skills --skills odev"
+            )
 
         return agent.run(
             prompt,

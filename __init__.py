@@ -1,21 +1,23 @@
-"""AI plugin initialization."""
+"""odev-plugin-ai: AI agent integration for odev.
 
-from odev.common.odev import Odev
-from odev.plugins.odev_plugin_ai.common.skills import SkillManager
+On load, substitutes the default OdoobinProcess with AI_OdoobinProcess so that
+log filtering and other AI-sandbox-specific behaviors are applied automatically
+whenever Odoo is started inside an AI bwrap sandbox (i.e., when AI_SANDBOX=1).
+"""
 
-original_upgrade = Odev.upgrade
+import os
 
+if os.environ.get("AI_SANDBOX") == "1":
+    from odev.common.odev import Odev
+    from .common.odoobin import AI_OdoobinProcess
 
-def patched_upgrade(self):
-    """Override standard update/upgrade to sync skills."""
-    original_upgrade(self)
-    try:
-        # Sync skills automatically after an upgrade
-        SkillManager(self).sync_skills(info=True)
-    except Exception as e:
-        from odev.common.logging import logging
+    # Set at class level so it applies even if framework was created before this runs
+    Odev._odoobin_process_class = AI_OdoobinProcess
 
-        logging.getLogger(__name__).warning(f"Could not automatically sync skills after upgrade: {e}")
+    # Also patch the existing instance for update-hook overrides
+    from odev import common as _common
 
-
-Odev.upgrade = patched_upgrade
+    if _common.framework is not None:
+        _common.framework.odoobin_process_class = AI_OdoobinProcess
+        _common.framework.check_release = lambda: None
+        _common.framework._should_update_now = lambda: False

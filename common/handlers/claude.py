@@ -1,5 +1,4 @@
 import json
-import shutil
 
 from odev.common.logging import logging
 
@@ -33,31 +32,8 @@ class ClaudeHandler(BaseAgentHandler):
     def get_global_config_name(self):
         return ".claude.json"
 
-    def get_skill_target(self):
-        return (".claude", "CLAUDE.md")
-
-    def inject_skills(self, target_dir):
-        skill_target = self.get_skill_target()
-        if not skill_target:
-            return
-
-        rel_dir, md_filename = skill_target
-        skills_dest = target_dir / "skills"
-        skill_refs = []
-
-        for skill in self.get_enabled_skills():
-            skills_dest.mkdir(parents=True, exist_ok=True)
-            # Claude / opencode-cli: inject via @import in the MD file
-            shutil.copy2(skill.path / "SKILL.md", skills_dest / f"{skill.name}.md")
-            skill_refs.append(f"@skills/{skill.name}.md")
-
-        if skill_refs:
-            md_file = target_dir / md_filename
-            existing = md_file.read_text() if md_file.exists() else ""
-            with open(md_file, "a") as f:
-                if existing and not existing.endswith("\n"):
-                    f.write("\n")
-                f.write("\n".join(skill_refs) + "\n")
+    def get_agent_config_rel_path(self):
+        return ".claude"
 
     def inject_trust(self, target_dir, trusted_paths):
         super().inject_trust(target_dir, trusted_paths)

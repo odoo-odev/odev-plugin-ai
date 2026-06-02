@@ -1,5 +1,3 @@
-import shutil
-
 from .base import BaseAgentHandler
 
 
@@ -19,17 +17,8 @@ class GeminiHandler(BaseAgentHandler):
     def get_creds_files(self):
         return ["gemini-credentials.json", "google_accounts.json", "oauth_creds.json"]
 
-    def get_skill_target(self):
-        return (".gemini", "GEMINI.md")
-
-    def inject_skills(self, target_dir):
-        skills_dest = target_dir / "skills"
-        for skill in self.get_enabled_skills():
-            skills_dest.mkdir(parents=True, exist_ok=True)
-            dest = skills_dest / skill.name
-            if dest.exists():
-                shutil.rmtree(dest)
-            shutil.copytree(skill.path, dest)
+    def get_agent_config_rel_path(self):
+        return ".gemini"
 
     def get_command(self, prompt, resume, all_candidate_paths, model, headless, yolo):
         cmd = ["gemini"]

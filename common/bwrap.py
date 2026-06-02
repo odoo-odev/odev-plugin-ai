@@ -2,6 +2,7 @@ import os
 import shlex
 import shutil
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 
@@ -24,7 +25,7 @@ def _check_bwrap_support():
     try:
         # Try a minimal bwrap command that requires user namespaces
         subprocess.run(
-            ["bwrap", "--unshare-user", "--true"],
+            ["bwrap", "--unshare-user", "--version"],
             capture_output=True,
             check=True,
             timeout=2,
@@ -142,17 +143,7 @@ class BwrapSandbox(OdevFrameworkMixin):
 
     def _resolve_sandbox_dirs(self, sandbox_dirs: list[str]) -> list[tuple[Path, Path]]:
         """Parse sandbox_dirs entries into (host, guest) pairs."""
-        result = []
-        for s in sandbox_dirs:
-            if ":" in s:
-                host, guest = s.split(":", 1)
-                host_p = Path(host).resolve()
-                guest_p = Path(guest)
-            else:
-                host_p = Path(s).resolve()
-                guest_p = host_p
-            result.append((host_p, guest_p))
-        return result
+        return [(Path(s).resolve(), Path(s).resolve()) for s in sandbox_dirs]
 
     def _prepare_sandbox_config(
         self,
@@ -177,15 +168,21 @@ class BwrapSandbox(OdevFrameworkMixin):
                 [
                     # Type B — user workspace (primary, RW)
                     *[bind(host, guest, ro=False, primary=True) for host, guest in effective_sandbox_binds],
-                    # Type B — extra dirs provided by the caller (RO)
-                    *[bind(e.split(":", 1)[0], e.split(":", 1)[1] if ":" in e else e) for e in (extra_bind_dirs or [])],
+                    # Type B — extra dirs provided by the caller (RW, now Primary)
+                    *[bind(e, ro=False, primary=True) for e in (extra_bind_dirs or [])],
                     # Type A — odev infrastructure (parents are mounted before children, no dedup)
                     bind(self.odev.path),
-                    bind(self.odev.home_path / "plugins"),
+                    bind(self.odev.plugins_path),
+                    # Resolve plugin symlink targets so Python can import them inside bwrap.
+                    # plugins_path contains symlinks (e.g. odev_plugin_ai -> /path/to/repo);
+                    # the symlink itself is visible via the plugins_path mount, but the target
+                    # directory must be separately mounted for Python imports to work.
+                    *[bind(p) for p in self.odev.plugins_path.iterdir() if p.is_symlink()],
                     # RW access is required for odev to perform git operations/worktree management
                     bind(self.odev.home_path / "worktrees", ro=False),
                     bind(self.odev.home_path / "virtualenvs", ro=False),
                     bind(self.odev.home_path / "browsers"),
+                    bind(sys.prefix),
                     *[bind(r.path, ro=False) for r in odoo_repositories(enterprise=True)],
                 ],
             )
@@ -223,12 +220,14 @@ class BwrapSandbox(OdevFrameworkMixin):
         chrome = Chrome(self.odev)
         chrome_exe = chrome.provision()
         chrome_guest_bin = None
+        chrome_bound = False
         if chrome_exe:
             # Bind the Chrome installation to /opt/google/chrome in the sandbox
             # We bind the directory containing the binary and its paks/libs
             chrome_dir = chrome_exe.parent
             cmd.extend(["--ro-bind", str(chrome_dir), "/opt/google/chrome"])
             chrome_guest_bin = "/opt/google/chrome/chrome"
+            chrome_bound = True
 
         # Use the Chrome utility to generate a wrapper in the guest /tmp
         try:
@@ -245,6 +244,8 @@ class BwrapSandbox(OdevFrameworkMixin):
         except Exception as e:
             logger.warning(f"Failed to setup Chrome wrapper: {e}")
         self._add_runtime_binds(cmd)
+        if not chrome_bound:
+            cmd.extend(["--ro-bind-try", "/opt/google/chrome", "/opt/google/chrome"])
         cmd.extend(
             [
                 "--ro-bind",
@@ -380,14 +381,12 @@ class BwrapSandbox(OdevFrameworkMixin):
             if ":" in d:
                 trusted_paths.append(d.split(":")[1])
 
-        if skill_target := self.handler.get_skill_target():
-            rel_dir, _md_filename = skill_target
+        if rel_dir := self.handler.get_agent_config_rel_path():
             is_persistent = rel_dir in persistent_dirs
             target_dir = (host_home / rel_dir) if is_persistent else (playground / rel_dir)
             if not is_persistent:
                 target_dir.mkdir(parents=True, exist_ok=True)
 
-            self.handler.inject_skills(target_dir)
             self.handler.inject_trust(target_dir, trusted_paths)
             self.handler.cleanup_junk(target_dir)
 
