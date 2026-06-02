@@ -48,7 +48,6 @@ class AgentCLI(BwrapSandbox):
         """Determine agent-specific command, directories, and files to mount."""
         agent_dirs = [
             host_home / ".cache",
-            host_home / ".local",
             host_home / ".config" / "rtk",
             host_home / ".claude",
             host_home / ".agents",
@@ -84,7 +83,11 @@ class AgentCLI(BwrapSandbox):
             yolo=self.yolo,
         )
 
-        return agent_cmd, agent_dirs, agent_files
+        # Deduplicate directories and files while preserving order
+        unique_dirs = list(dict.fromkeys(agent_dirs))
+        unique_files = list(dict.fromkeys(agent_files))
+
+        return agent_cmd, unique_dirs, unique_files
 
     def run(
         self,
@@ -99,6 +102,19 @@ class AgentCLI(BwrapSandbox):
         cwd: str | None = None,
     ) -> bool:
         """Run the AI agent within a bwrap sandbox."""
+        if resume == "latest":
+            if self.cli == "gemini":
+                # Gemini CLI natively supports --resume latest inside the sandbox
+                pass
+            else:
+                latest_id = self.get_latest_session_id()
+                if latest_id:
+                    logger.info(f"Resuming latest session: {latest_id}")
+                    resume = latest_id
+                else:
+                    logger.warning("No previous session found to resume.")
+                    resume = None
+
         host_home = Path.home().resolve()
         playground = Path(tempfile.mkdtemp(prefix=f"odev-ai-{self.cli}-"))
         sandbox_tmp = Path(tempfile.mkdtemp(prefix=f"odev-ai-tmp-{self.cli}-"))

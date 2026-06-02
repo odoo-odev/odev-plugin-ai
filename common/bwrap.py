@@ -77,7 +77,7 @@ class BwrapSandbox(OdevFrameworkMixin):
 
         result: list[tuple[str, str]] = []
         for (parent, mode), names in groups.items():
-            names_sorted = sorted(names)
+            names_sorted = sorted(set(names))
             if len(names_sorted) == 1:
                 path_str = f"{parent}/{names_sorted[0]}"
             else:
