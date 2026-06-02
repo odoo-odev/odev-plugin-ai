@@ -13,7 +13,6 @@ from odev.common.odoobin import odoo_repositories
 from odev.common.python import PythonEnv
 from odev.common.version import OdooVersion
 
-
 logger = logging.getLogger(__name__)
 
 
@@ -34,8 +33,13 @@ def _check_bwrap_support():
         stderr = getattr(e, "stderr", b"").decode()
         if "Permission denied" in stderr or "setting up uid map" in stderr:
             # Check for Ubuntu-specific sysctl
-            apparmor_restrict_path = Path("/proc/sys/kernel/apparmor_restrict_unprivileged_userns")
-            if apparmor_restrict_path.exists() and apparmor_restrict_path.read_text().strip() == "1":
+            apparmor_restrict_path = Path(
+                "/proc/sys/kernel/apparmor_restrict_unprivileged_userns"
+            )
+            if (
+                apparmor_restrict_path.exists()
+                and apparmor_restrict_path.read_text().strip() == "1"
+            ):
                 return False, (
                     "Your system (Ubuntu 24.04+) is restricting unprivileged user namespaces via AppArmor.\n"
                     "This prevents the AI sandbox from starting.\n\n"
@@ -115,7 +119,9 @@ class BwrapSandbox(OdevFrameworkMixin):
                 if src == dst:
                     infra_items.append((src, mode))
                 else:
-                    mapping_lines.append(f"{src} {string.stylize(f'-> {dst}', 'bold color.green')} ({mode})")
+                    mapping_lines.append(
+                        f"{src} {string.stylize(f'-> {dst}', 'bold color.green')} ({mode})"
+                    )
 
         return infra_items, mapping_lines
 
@@ -152,14 +158,21 @@ class BwrapSandbox(OdevFrameworkMixin):
 
         from odev.common import string
 
-        console.rule(string.stylize("AI SANDBOX SECURITY WARNING", "bold color.red"), style="color.red")
+        console.rule(
+            string.stylize("AI SANDBOX SECURITY WARNING", "bold color.red"),
+            style="color.red",
+        )
 
         console.print(
             f"\n{string.stylize('WARNING:', 'bold color.yellow')} You are running an AI agent in a sandboxed environment."
         )
-        console.print("The agent can read/write files and access the database within this sandbox.")
+        console.print(
+            "The agent can read/write files and access the database within this sandbox."
+        )
 
-        console.print(f"\n{string.stylize('PRIMARY WORKSPACES (Read-Write Access):', 'bold color.cyan')}")
+        console.print(
+            f"\n{string.stylize('PRIMARY WORKSPACES (Read-Write Access):', 'bold color.cyan')}"
+        )
         primary_binds = [b for b in binds if b[3]]
         if primary_dirs:
             # Sort primary binds so that the ones in primary_dirs come first, in their original order
@@ -174,13 +187,19 @@ class BwrapSandbox(OdevFrameworkMixin):
             primary_binds.sort(key=sort_key)
 
         for src, dst, _ro, _primary in primary_binds:
-            label = f"{src} {string.stylize(f'-> {dst}', 'bold color.green')}" if src != dst else str(src)
+            label = (
+                f"{src} {string.stylize(f'-> {dst}', 'bold color.green')}"
+                if src != dst
+                else str(src)
+            )
             console.print(f" • {label}")
 
         console.print(f"\n{string.stylize('DATABASE ACCESS:', 'bold color.cyan')}")
         if database:
             console.print(f" • Database: {string.stylize(database, 'color.purple')}")
-            console.print(f" • User:     {string.stylize(db_user or 'default', 'color.purple')}")
+            console.print(
+                f" • User:     {string.stylize(db_user or 'default', 'color.purple')}"
+            )
         else:
             console.print(
                 f" • {string.stylize('Isolating (Empty ephemeral cluster, no database copied)', 'color.green')}"
@@ -189,7 +208,9 @@ class BwrapSandbox(OdevFrameworkMixin):
         if database and not ephemeral_pg:
             warning = string.stylize("WARNING:", "bold color.red")
             host = string.stylize("HOST", "bold")
-            console.print(f"\n{warning} You are granting access to your {host} PostgreSQL cluster.")
+            console.print(
+                f"\n{warning} You are granting access to your {host} PostgreSQL cluster."
+            )
             console.print(
                 f"The agent will be able to see and potentially access {string.stylize('ALL', 'bold')} your local databases."
             )
@@ -198,7 +219,9 @@ class BwrapSandbox(OdevFrameworkMixin):
             binds, agent_dirs, agent_files, active_venv_path, odoo_filestore, string
         )
 
-        console.print(f"\n{string.stylize('INFRASTRUCTURE & REFERENCE (System/Source/Config):', 'bold color.cyan')}")
+        console.print(
+            f"\n{string.stylize('INFRASTRUCTURE & REFERENCE (System/Source/Config):', 'bold color.cyan')}"
+        )
         for path, mode in self._group_infra_items(infra_items):
             console.print(f" • {string.stylize(path, 'color.purple')} ({mode})")
 
@@ -211,24 +234,22 @@ class BwrapSandbox(OdevFrameworkMixin):
 
         if not self.yolo and not console.bypass_prompt:
             agent_names = {
-                "claude": ("Claude", "claude"),
-                "gemini": ("Gemini", "gemini"),
-                "copilot": ("Copilot", "copilot"),
-                "opencode-cli": ("OpenCode", "opencode"),
+                "claude": "Claude",
+                "gemini": "Gemini",
+                "copilot": "Copilot",
+                "opencode-cli": "OpenCode",
             }
-            name, style_class = agent_names.get(self.cli, (self.cli, "question"))
-            
+            name = agent_names.get(self.cli, self.cli)
+
             if self.model and self.model != "auto":
                 display_name = f"{name} ({self.model})"
             else:
                 display_name = name
 
-            message = [
-                ("class:question", "Do you want to proceed with the "),
-                (f"class:{style_class}", display_name),
-                ("class:question", " AI agent execution?"),
-            ]
-            return console.confirm(message, default=True)
+            return console.confirm(
+                f"Do you want to proceed with the {display_name} AI agent execution?",
+                default=True,
+            )
         return True
 
     def _prepare_odev_config(self, playground, host_home):
@@ -267,7 +288,10 @@ class BwrapSandbox(OdevFrameworkMixin):
                 None,
                 [
                     # Type B — user workspace (primary, RW)
-                    *[bind(host, guest, ro=False, primary=True) for host, guest in effective_sandbox_binds],
+                    *[
+                        bind(host, guest, ro=False, primary=True)
+                        for host, guest in effective_sandbox_binds
+                    ],
                     # Type B — extra dirs provided by the caller (RW, now Primary)
                     *[bind(e, ro=False, primary=True) for e in (extra_bind_dirs or [])],
                     # Type A — odev infrastructure (parents are mounted before children, no dedup)
@@ -277,12 +301,19 @@ class BwrapSandbox(OdevFrameworkMixin):
                     # plugins_path contains symlinks (e.g. odev_plugin_ai -> /path/to/repo);
                     # the symlink itself is visible via the plugins_path mount, but the target
                     # directory must be separately mounted for Python imports to work.
-                    *[bind(p) for p in self.odev.plugins_path.iterdir() if p.is_symlink()],
+                    *[
+                        bind(p)
+                        for p in self.odev.plugins_path.iterdir()
+                        if p.is_symlink()
+                    ],
                     # RW access is required for odev to perform git operations/worktree management
                     bind(self.odev.home_path / "worktrees", ro=False),
                     bind(self.odev.home_path / "virtualenvs", ro=False),
                     bind(sys.prefix),
-                    *[bind(r.path, ro=False) for r in odoo_repositories(enterprise=True)],
+                    *[
+                        bind(r.path, ro=False)
+                        for r in odoo_repositories(enterprise=True)
+                    ],
                 ],
             )
         )
@@ -292,9 +323,14 @@ class BwrapSandbox(OdevFrameworkMixin):
         # so that the RW mount wins in bwrap.
         binds.sort(key=lambda b: (len(b[1].parts), not b[2]))
 
-        return {"binds": binds, "active_venv_path": self._resolve_active_venv(database, version)}
+        return {
+            "binds": binds,
+            "active_venv_path": self._resolve_active_venv(database, version),
+        }
 
-    def _resolve_active_venv(self, database: str | None, version: str | None) -> Path | None:
+    def _resolve_active_venv(
+        self, database: str | None, version: str | None
+    ) -> Path | None:
         """Return the active virtualenv path (used to prepend $PATH), or None."""
         from odev.common.databases.local import LocalDatabase
 
@@ -498,27 +534,38 @@ class BwrapSandbox(OdevFrameworkMixin):
 
         for rel_dir in relevant_dirs:
             is_persistent = rel_dir in persistent_dirs
-            target_dir = (host_home / rel_dir) if is_persistent else (playground / rel_dir)
+            target_dir = (
+                (host_home / rel_dir) if is_persistent else (playground / rel_dir)
+            )
             if not is_persistent:
                 target_dir.mkdir(parents=True, exist_ok=True)
             self._copy_agent_credentials(target_dir, rel_dir, is_persistent, host_home)
 
         # Copy global CLI config file (e.g. ~/.claude.json)
         if gcn := self.handler.get_global_config_name():
-            is_covered = any(gcn == pd or gcn.startswith(pd + "/") for pd in persistent_dirs)
+            is_covered = any(
+                gcn == pd or gcn.startswith(pd + "/") for pd in persistent_dirs
+            )
             if not is_covered:
                 src = host_home / gcn
                 if src.exists():
                     shutil.copy2(src, playground / gcn)
 
-        trusted_paths = [str(host_home), "/knowledge", str(self.odev.home_path / "worktrees"), "/upgrade"]
+        trusted_paths = [
+            str(host_home),
+            "/knowledge",
+            str(self.odev.home_path / "worktrees"),
+            "/upgrade",
+        ]
         for d in all_candidate_paths:
             if ":" in d:
                 trusted_paths.append(d.split(":")[1])
 
         if rel_dir := self.handler.get_agent_config_rel_path():
             is_persistent = rel_dir in persistent_dirs
-            target_dir = (host_home / rel_dir) if is_persistent else (playground / rel_dir)
+            target_dir = (
+                (host_home / rel_dir) if is_persistent else (playground / rel_dir)
+            )
             if not is_persistent:
                 target_dir.mkdir(parents=True, exist_ok=True)
 
@@ -616,7 +663,9 @@ class BwrapSandbox(OdevFrameworkMixin):
             # To prevent secrets (like API keys) from appearing in process listings (ps),
             # we write the bwrap arguments to a temporary protected file and pass them
             # to bwrap via a file descriptor using shell redirection.
-            with tempfile.NamedTemporaryFile(mode="wb", prefix="odev-ai-args-", delete=True) as f:
+            with tempfile.NamedTemporaryFile(
+                mode="wb", prefix="odev-ai-args-", delete=True
+            ) as f:
                 os.chmod(f.name, 0o600)
                 # bwrap --args expects null-separated arguments.
                 # We ONLY put secrets in the FD to avoid "usage: bwrap" errors
