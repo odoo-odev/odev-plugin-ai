@@ -12,6 +12,7 @@ import subprocess
 import tempfile
 from pathlib import Path
 
+from odev.common.browsers import Chrome
 from odev.common.console import console
 from odev.common.logging import logging
 
@@ -67,30 +68,6 @@ class BwrapSandbox(Sandbox):
 
     # --- profile / argv builders --------------------------------------------
 
-    def _setup_chrome_wrapper(self, cmd: list[str], sandbox_tmp: Path) -> None:
-        """Create a Chrome wrapper script in /tmp that injects rendering-consistency
-        flags, then point ODOO_BROWSER_BIN at it so Odoo picks it up."""
-        wrapper = sandbox_tmp / "odoo-chrome-wrapper"
-        wrapper.write_text(
-            "#!/bin/bash\n"
-            "for bin in google-chrome chromium chromium-browser google-chrome-stable; do\n"
-            '    real=$(command -v "$bin" 2>/dev/null)\n'
-            '    if [ -n "$real" ]; then\n'
-            '        exec "$real" \\\n'
-            "            --font-render-hinting=none \\\n"
-            "            --force-device-scale-factor=1 \\\n"
-            "            --disable-font-subpixel-positioning \\\n"
-            "            --hide-scrollbars \\\n"
-            "            --window-size=1366,768 \\\n"
-            '            "$@"\n'
-            "    fi\n"
-            "done\n"
-            'echo "Chrome not found" >&2\n'
-            "exit 1\n"
-        )
-        wrapper.chmod(0o755)
-        cmd.extend(["--setenv", "ODOO_BROWSER_BIN", "/tmp/odoo-chrome-wrapper"])
-
     def _add_runtime_binds(self, cmd: list[str]) -> None:
         """Bind only necessary runtime sockets (IDE IPC) to the sandbox."""
         uid = os.getuid()
@@ -106,8 +83,35 @@ class BwrapSandbox(Sandbox):
 
     def _add_system_binds(self, cmd: list[str], host_home: Path, sandbox_tmp: Path, cwd: str) -> None:
         """Add standard system and network-related binds to the command."""
-        self._setup_chrome_wrapper(cmd, sandbox_tmp)
+        chrome = Chrome(self.odev)
+        chrome_exe = chrome.provision()
+        chrome_guest_bin = None
+        chrome_bound = False
+        if chrome_exe:
+            # Bind the Chrome installation to /opt/google/chrome in the sandbox
+            # We bind the directory containing the binary and its paks/libs
+            chrome_dir = chrome_exe.parent
+            cmd.extend(["--ro-bind", str(chrome_dir), "/opt/google/chrome"])
+            chrome_guest_bin = "/opt/google/chrome/chrome"
+            chrome_bound = True
+
+        # Use the Chrome utility to generate a wrapper in the guest /tmp
+        try:
+            # Temporarily redirect Chrome.odev.home_path to our sandbox_tmp to generate the wrapper
+            # Chrome.get_wrapper() will create {home_path}/tmp/odoo-chrome-wrapper
+            original_home = self.odev.home_path
+            self.odev.home_path = sandbox_tmp
+            chrome.get_wrapper(chrome_bin=chrome_guest_bin)
+            self.odev.home_path = original_home
+
+            # Point ODOO_BROWSER_BIN at the wrapper inside the guest's /tmp
+            # Since sandbox_tmp is bound to /tmp, the file is at /tmp/tmp/odoo-chrome-wrapper
+            cmd.extend(["--setenv", "ODOO_BROWSER_BIN", "/tmp/tmp/odoo-chrome-wrapper"])
+        except Exception as e:
+            logger.warning(f"Failed to setup Chrome wrapper: {e}")
         self._add_runtime_binds(cmd)
+        if not chrome_bound:
+            cmd.extend(["--ro-bind-try", "/opt/google/chrome", "/opt/google/chrome"])
         cmd.extend(
             [
                 "--ro-bind",
@@ -131,9 +135,6 @@ class BwrapSandbox(Sandbox):
                 "--ro-bind",
                 "/etc/alternatives",
                 "/etc/alternatives",
-                "--ro-bind-try",
-                "/opt/google/chrome",
-                "/opt/google/chrome",
                 "--ro-bind-try",
                 "/snap",
                 "/snap",

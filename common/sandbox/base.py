@@ -216,6 +216,7 @@ class Sandbox(OdevFrameworkMixin, ABC):
                     # RW access is required for odev to perform git operations/worktree management
                     bind(self.odev.home_path / "worktrees", ro=False),
                     bind(self.odev.home_path / "virtualenvs", ro=False),
+                    bind(self.odev.home_path / "browsers"),
                     bind(sys.prefix),
                     *[bind(r.path, ro=False) for r in odoo_repositories(enterprise=True)],
                 ],
