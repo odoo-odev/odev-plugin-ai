@@ -2,6 +2,7 @@ import json
 
 from odev.common.logging import logging
 
+from . import config_dir
 from .base import BaseAgentHandler
 
 
@@ -9,14 +10,26 @@ logger = logging.getLogger(__name__)
 
 
 class ClaudeHandler(BaseAgentHandler):
+    def _config_dir(self) -> str:
+        """Resolve the Claude config dir name. The separate-account override
+        applies to the 'claude' CLI only; opencode-cli (a subclass) stays on
+        '.claude'."""
+        if self.cli != "claude":
+            return config_dir.DEFAULT_CONFIG_DIR
+        try:
+            configured = self.odev.config.ai.claude_config_dir
+        except Exception:
+            configured = ""
+        return config_dir.resolve_claude_config_dir(configured)
+
     def get_config_dirs(self):
-        return [".claude", ".config/claude"]
+        return [self._config_dir(), ".config/claude"]
 
     def get_persistent_dirs(self):
-        return [".claude", ".config/claude", ".opencode"]
+        return [self._config_dir(), ".config/claude", ".opencode"]
 
     def get_config_files(self):
-        return [".claude.json"]
+        return config_dir.config_files(self._config_dir())
 
     def get_creds_files(self):
         return [
@@ -30,10 +43,13 @@ class ClaudeHandler(BaseAgentHandler):
         ]
 
     def get_global_config_name(self):
-        return ".claude.json"
+        return config_dir.global_config_name(self._config_dir())
 
     def get_agent_config_rel_path(self):
-        return ".claude"
+        return self._config_dir()
+
+    def get_extra_env(self):
+        return config_dir.claude_extra_env(self.host_home, self._config_dir())
 
     def inject_trust(self, target_dir, trusted_paths):
         super().inject_trust(target_dir, trusted_paths)
@@ -50,8 +66,9 @@ class ClaudeHandler(BaseAgentHandler):
             settings_data["trustedDirectories"] = trusted_dirs
             settings_file.write_text(json.dumps(settings_data, indent=2))
 
-            # .claude.json trust (project-specific)
-            claude_json_file = self.host_home / ".claude.json"
+            # .claude.json trust (project-specific). Default: ~/.claude.json;
+            # override: ~/<dir>/.claude.json (the override account's own file).
+            claude_json_file = config_dir.global_config_path(self.host_home, self._config_dir())
             if claude_json_file.exists():
                 try:
                     claude_data = json.loads(claude_json_file.read_text())
