@@ -236,6 +236,10 @@ class AgentCLI(OdevFrameworkMixin):
         """Return the ID of the most recent session for this agent CLI."""
         try:
             home = Path.home()
+            # Preserve the original CLI allowlist: only these resolve a sessions
+            # file; everything else (e.g. copilot) returns None as before.
+            if self.cli not in ("gemini", "claude", "opencode-cli"):
+                return None
             config_rel = self.handler.get_agent_config_rel_path()
             if not config_rel:
                 return None
