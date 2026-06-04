@@ -36,6 +36,14 @@ class BaseAgentHandler:
         """Return name of global config file (e.g. .claude.json)."""
         return None
 
+    def get_extra_env(self) -> dict:
+        """Extra environment variables to inject into the sandbox for this agent.
+
+        Default: none. Subclasses override to add CLI-specific env (e.g. Claude's
+        CLAUDE_CONFIG_DIR when a separate-account override is configured).
+        """
+        return {}
+
     def inject_trust(self, target_dir, trusted_paths):
         """Inject trusted paths into the agent's config."""
         try:
