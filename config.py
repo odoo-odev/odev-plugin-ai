@@ -22,6 +22,15 @@ class AiSection(Section):
     def favorite_cli(self, value: str):
         self.set("favorite_cli", value)
 
+    @property
+    def claude_config_dir(self) -> str:
+        """Config dir name under $HOME for the Claude account `odev ai` uses (e.g. .claude-odev). Empty = default ~/.claude."""
+        return self.get("claude_config_dir", "")
+
+    @claude_config_dir.setter
+    def claude_config_dir(self, value: str):
+        self.set("claude_config_dir", value)
+
     def get_favorite_model(self, cli: str) -> str | None:
         """Return the favorite model specifically for the given CLI agent."""
         return self.get(f"favorite_model_{cli}")
