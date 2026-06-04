@@ -60,7 +60,6 @@ class AgentCLI(OdevFrameworkMixin):
             host_home / ".cache",
             host_home / ".local",
             host_home / ".config" / "rtk",
-            host_home / ".claude",
             host_home / ".agents",
             host_home / ".antigravity",
         ]
@@ -115,6 +114,7 @@ class AgentCLI(OdevFrameworkMixin):
         }
         if database:
             env["PGDATABASE"] = database
+        env.update(self.handler.get_extra_env())
         return env
 
     def _build_sandbox_path(self, active_venv_path: Path | None, host_home: Path) -> str:
@@ -236,14 +236,12 @@ class AgentCLI(OdevFrameworkMixin):
         """Return the ID of the most recent session for this agent CLI."""
         try:
             home = Path.home()
-            if self.cli == "gemini":
-                sessions_file = home / ".gemini" / "sessions.json"
-            elif self.cli in ("claude", "opencode-cli"):
-                sessions_file = home / ".claude" / "sessions.json"
-            else:
+            config_rel = self.handler.get_agent_config_rel_path()
+            if not config_rel:
                 return None
+            sessions_file = home / config_rel / "sessions.json"
 
-            if sessions_file and sessions_file.exists():
+            if sessions_file.exists():
                 data = json.loads(sessions_file.read_text())
                 sessions = data.get("sessions", [])
                 if sessions:
