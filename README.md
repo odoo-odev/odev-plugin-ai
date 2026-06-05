@@ -26,6 +26,12 @@ following tools must be installed on your host system:
     curl -fsSL https://raw.githubusercontent.com/rtk-ai/rtk/refs/heads/master/install.sh | sh
     rtk init --global
     ```
+-   **Node.js & npm (npx)**: Essential for automatic browser provisioning (Chrome) during tour tests and AI-driven UI
+    validation.
+    ```bash
+    # On Ubuntu/Debian
+    sudo apt install nodejs npm
+    ```
 
 ## Configuration
 
