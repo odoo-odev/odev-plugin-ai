@@ -46,17 +46,9 @@ class TestCommand(BaseTestCommand, AICommandMixin):
 
         prompt = (
             f"Run the following Odoo tests: `{cmd_to_run}`\n\n"
-            f"Analyze any failures{modules_str} and apply exactly one of the three rules below — nothing else:\n\n"
-            "RULE 1 — Custom test fails:\n"
-            "   The custom module code is broken (e.g. upgrade logic did not preserve the expected workflow).\n"
-            "   → Fix the custom module CODE so the workflow is correct again. Never weaken or skip the test.\n\n"
-            "RULE 2 — Standard Odoo test fails because of our custom code:\n"
-            "   Our changes altered a workflow or model that a standard test relied on.\n"
-            "   → Monkey-patch the standard test from within the custom module so it aligns with the new workflow.\n"
-            "   Never modify standard Odoo files. Never make the test trivially pass by removing assertions.\n\n"
-            "RULE 3 — Standard Odoo test fails for an unrelated reason:\n"
-            "   → Do nothing. Skip it and move on.\n\n"
-            f"After applying the fix, re-run using exactly `{cmd_to_run}` and repeat"
+            f"Analyze any failures{modules_str} and resolve them by following the "
+            f"**AI TEST FAILURE RESOLUTION RULES** defined in your `test_skill` skill.\n\n"
+            f"After applying a fix, re-run using exactly `{cmd_to_run}` and repeat"
             " until all Rule-1 and Rule-2 failures are resolved.\n"
             "Finish with a summary of every change made and which rule justified it."
         )

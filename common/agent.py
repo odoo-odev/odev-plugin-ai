@@ -58,7 +58,6 @@ class AgentCLI(OdevFrameworkMixin):
         """Determine agent-specific command, directories, and files to mount."""
         agent_dirs = [
             host_home / ".cache",
-            host_home / ".local",
             host_home / ".config" / "rtk",
             host_home / ".claude",
             host_home / ".agents",
@@ -73,8 +72,8 @@ class AgentCLI(OdevFrameworkMixin):
         for f in self.handler.get_config_files():
             agent_files.append(host_home / f)
 
-        # Node.js managers (NVM, n, asdf) and npm
-        for node_dir in [".nvm", ".n", ".asdf", ".npm"]:
+        # Node.js managers (NVM, n, asdf)
+        for node_dir in [".nvm", ".n", ".asdf"]:
             p = host_home / node_dir
             if p.exists():
                 agent_dirs.append(p)
@@ -93,7 +92,11 @@ class AgentCLI(OdevFrameworkMixin):
             yolo=self.yolo,
         )
 
-        return agent_cmd, agent_dirs, agent_files
+        # Deduplicate directories and files while preserving order
+        unique_dirs = list(dict.fromkeys(agent_dirs))
+        unique_files = list(dict.fromkeys(agent_files))
+
+        return agent_cmd, unique_dirs, unique_files
 
     def _build_env(
         self,
@@ -159,6 +162,19 @@ class AgentCLI(OdevFrameworkMixin):
         # from previous Ctrl+C'd or crashed runs before we start fresh ones.
         PostgresSandbox.cleanup_orphans()
 
+        if resume == "latest":
+            if self.cli == "gemini":
+                # Gemini CLI natively supports --resume latest inside the sandbox
+                pass
+            else:
+                latest_id = self.get_latest_session_id()
+                if latest_id:
+                    logger.info(f"Resuming latest session: {latest_id}")
+                    resume = latest_id
+                else:
+                    logger.warning("No previous session found to resume.")
+                    resume = None
+
         host_home = Path.home().resolve()
         playground = Path(tempfile.mkdtemp(prefix=f"odev-ai-{self.cli}-"))
         sandbox_tmp = Path(tempfile.mkdtemp(prefix=f"odev-ai-tmp-{self.cli}-"))
@@ -175,11 +191,18 @@ class AgentCLI(OdevFrameworkMixin):
         active_venv_path = sandbox_data["active_venv_path"]
 
         if not cwd:
-            primary_bind = next((b for b in final_binds if b[3]), None)
-            cwd = str(primary_bind[1]) if primary_bind else str(host_home)
+            # Prioritize the first directory in sandbox_dirs (the main project path)
+            if sandbox_dirs:
+                main_path = Path(sandbox_dirs[0]).resolve()
+                primary_bind = next((b for b in final_binds if b[0] == main_path), None)
+                cwd = str(primary_bind[1]) if primary_bind else str(main_path)
+            else:
+                # Fallback to the first primary bind or home
+                primary_bind = next((b for b in final_binds if b[3]), None)
+                cwd = str(primary_bind[1]) if primary_bind else str(host_home)
 
         # Candidate paths for trustedDirectories and --add-dir inclusion
-        all_candidate_paths = [str(dst) for src, dst, _, _ in final_binds if src != host_home]
+        all_candidate_paths = [str(dst) for src, dst, _, primary in final_binds if src != host_home and primary]
 
         agent_cmd, agent_dirs, agent_files = self._get_agent_setup(prompt, resume, all_candidate_paths, host_home)
 
@@ -188,8 +211,9 @@ class AgentCLI(OdevFrameworkMixin):
 
         if database:
             db_info = (
-                f"(Environment: You have been granted access to a private, isolated CLONE of the host database '{database}'. "
-                "This is a separate, ephemeral PostgreSQL cluster. You can safely modify it as it "
+                f"(Environment: You have been granted access to a private, isolated PostgreSQL database named '{database}'. "
+                f"If the host database '{database}' exists, it has been cloned into this ephemeral cluster. "
+                "Otherwise it is an empty database. You can safely modify it as it "
                 "does not affect the live host data. Use 'psql' to work directly with it.)\n\n"
             )
         else:
@@ -228,6 +252,8 @@ class AgentCLI(OdevFrameworkMixin):
             db_user=db_user,
             pg_process=pg_process,
             active_venv_path=active_venv_path,
+            odoo_filestore=host_home / ".local" / "share" / "Odoo",
+            primary_dirs=[Path(d) for d in sandbox_dirs],
         )
 
         return self.sandbox.execute(spec)

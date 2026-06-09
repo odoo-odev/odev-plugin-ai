@@ -399,6 +399,9 @@ class SeatbeltSandbox(Sandbox):
             database=spec.database,
             db_user=spec.db_user,
             ephemeral_pg=spec.pg_process is not None,
+            active_venv_path=spec.active_venv_path,
+            odoo_filestore=spec.odoo_filestore,
+            primary_dirs=spec.primary_dirs,
         ):
             self._terminate_pg(spec.pg_process)
             self._cleanup_paths([spec.playground, spec.sandbox_tmp, spec.proxy_dir, spec.pg_data_dir])

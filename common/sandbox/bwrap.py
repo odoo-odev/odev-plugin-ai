@@ -69,9 +69,10 @@ class BwrapSandbox(Sandbox):
     # --- profile / argv builders --------------------------------------------
 
     def _add_runtime_binds(self, cmd: list[str]) -> None:
-        """Bind only necessary runtime sockets (IDE IPC) to the sandbox."""
+        """Bind only necessary runtime sockets (IDE IPC, Display servers) to the sandbox."""
         uid = os.getuid()
         runtime_dir = Path(f"/run/user/{uid}")
+        host_home = Path.home().resolve()
         if runtime_dir.exists():
             cmd.extend(["--dir", str(runtime_dir)])
             for socket in runtime_dir.glob("vscode-*.sock"):
@@ -80,6 +81,32 @@ class BwrapSandbox(Sandbox):
                 cmd.extend(["--bind-try", str(socket), str(socket)])
             for socket in runtime_dir.glob("cursor-*.sock"):
                 cmd.extend(["--bind-try", str(socket), str(socket)])
+
+            # Bind Wayland display socket if available
+            wayland_display = os.environ.get("WAYLAND_DISPLAY")
+            if wayland_display:
+                wayland_socket = runtime_dir / wayland_display
+                if wayland_socket.exists():
+                    cmd.extend(["--bind-try", str(wayland_socket), str(wayland_socket)])
+                    cmd.extend(["--setenv", "WAYLAND_DISPLAY", wayland_display])
+
+        # Bind X11 authority and environment variables if DISPLAY is available
+        if "DISPLAY" in os.environ:
+            cmd.extend(["--setenv", "DISPLAY", os.environ["DISPLAY"]])
+
+            xauth = os.environ.get("XAUTHORITY")
+            if not xauth:
+                default_xauth = host_home / ".Xauthority"
+                if default_xauth.exists():
+                    xauth = str(default_xauth)
+
+            if xauth:
+                xauth_path = Path(xauth)
+                if xauth_path.exists():
+                    parent_dir = xauth_path.parent
+                    cmd.extend(["--dir", str(parent_dir)])
+                    cmd.extend(["--ro-bind-try", str(xauth_path), str(xauth_path)])
+                    cmd.extend(["--setenv", "XAUTHORITY", str(xauth_path)])
 
     def _add_system_binds(self, cmd: list[str], host_home: Path, sandbox_tmp: Path, cwd: str) -> None:
         """Add standard system and network-related binds to the command."""
@@ -172,6 +199,12 @@ class BwrapSandbox(Sandbox):
                 "--bind",
                 str(sandbox_tmp),
                 "/tmp",
+            ]
+        )
+        if "DISPLAY" in os.environ:
+            cmd.extend(["--bind-try", "/tmp/.X11-unix", "/tmp/.X11-unix"])
+        cmd.extend(
+            [
                 "--ro-bind-try",
                 "/etc/machine-id",
                 "/etc/machine-id",
@@ -195,6 +228,9 @@ class BwrapSandbox(Sandbox):
                 "--bind-try",
                 str(host_home / ".local/share/Odoo"),
                 str(host_home / ".local/share/Odoo"),
+                "--ro-bind-try",
+                str(host_home / ".local/share/claude"),
+                str(host_home / ".local/share/claude"),
                 "--ro-bind",
                 "/etc/passwd",
                 "/etc/passwd",
@@ -255,6 +291,17 @@ class BwrapSandbox(Sandbox):
     def execute(self, spec: ExecutionSpec) -> bool:  # noqa: C901
         """Translate the spec into a bwrap argv and execute the agent."""
         host_home = Path.home().resolve()
+
+        # Pre-create system bind points in playground
+        for path_suffix in [
+            ".fonts",
+            ".local/share/fonts",
+            ".npm-global",
+            ".local/bin",
+            ".local/share/Odoo",
+            ".local/share/claude",
+        ]:
+            (spec.playground / path_suffix).mkdir(parents=True, exist_ok=True)
 
         cmd: list[str] = [
             "bwrap",
@@ -319,6 +366,9 @@ class BwrapSandbox(Sandbox):
             database=spec.database,
             db_user=spec.db_user,
             ephemeral_pg=spec.pg_process is not None,
+            active_venv_path=spec.active_venv_path,
+            odoo_filestore=spec.odoo_filestore,
+            primary_dirs=spec.primary_dirs,
         ):
             self._terminate_pg(spec.pg_process)
             self._cleanup_paths([spec.playground, spec.sandbox_tmp, spec.proxy_dir, spec.pg_data_dir])

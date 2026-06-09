@@ -48,6 +48,8 @@ class ExecutionSpec:
     db_user: str | None = None
     pg_process: subprocess.Popen | None = None
     active_venv_path: Path | None = None
+    odoo_filestore: Path | None = None
+    primary_dirs: list[Path] | None = None
 
 
 class Sandbox(OdevFrameworkMixin, ABC):
@@ -106,6 +108,9 @@ class Sandbox(OdevFrameworkMixin, ABC):
         database: str | None = None,
         db_user: str | None = None,
         ephemeral_pg: bool = True,
+        active_venv_path: Path | None = None,
+        odoo_filestore: Path | None = None,
+        primary_dirs: list[Path] | None = None,
     ) -> bool:
         """Display a warning message about the sandbox access and security risks."""
         if self.headless:
@@ -124,10 +129,32 @@ class Sandbox(OdevFrameworkMixin, ABC):
             console.print(f"{string.stylize('NOTE:', 'bold color.yellow')} {note}")
 
         console.print(f"\n{string.stylize('PRIMARY WORKSPACES (Read-Write Access):', 'bold color.cyan')}")
-        for src, dst, _ro, primary in binds:
-            if primary:
-                label = f"{src} {string.stylize(f'-> {dst}', 'bold color.green')}" if src != dst else str(src)
-                console.print(f" • {label}")
+        primary_binds = [b for b in binds if b[3]]
+        if primary_dirs:
+            # Sort primary binds so that the ones in primary_dirs come first, in their original order
+            primary_paths = [p.resolve() for p in primary_dirs]
+
+            def sort_key(b):
+                try:
+                    return primary_paths.index(b[0])
+                except ValueError:
+                    return len(primary_paths)
+
+            primary_binds.sort(key=sort_key)
+
+        home = str(Path.home().resolve())
+
+        def clean_path(p: Path) -> str:
+            p_str = str(p.resolve())
+            if p_str == home:
+                return "~"
+            if p_str.startswith(home + "/"):
+                return "~" + p_str[len(home) :]
+            return p_str
+
+        for src, dst, _ro, _primary in primary_binds:
+            label = f"{clean_path(src)} {string.stylize(f'-> {clean_path(dst)}', 'bold color.green')}" if src != dst else clean_path(src)
+            console.print(f" • {label}")
 
         console.print(f"\n{string.stylize('DATABASE ACCESS:', 'bold color.cyan')}")
         if database:
@@ -146,24 +173,56 @@ class Sandbox(OdevFrameworkMixin, ABC):
                 f"The agent will be able to see and potentially access {string.stylize('ALL', 'bold')} your local databases."
             )
 
-        console.print(f"\n{string.stylize('INFRASTRUCTURE & REFERENCE (System/Source/Config):', 'bold color.cyan')}")
+        # Build list of infrastructure/reference paths
+        infra_lines: list[tuple[str, str]] = []
         for d in agent_dirs:
-            console.print(f" • {d} (RW)")
+            infra_lines.append((clean_path(d), "RW"))
         for f in agent_files:
             if f.exists():
-                console.print(f" • {f} (RW)")
+                infra_lines.append((clean_path(f), "RW"))
+        if odoo_filestore and odoo_filestore.exists():
+            infra_lines.append((clean_path(odoo_filestore), "RW"))
+        if active_venv_path and active_venv_path.exists():
+            infra_lines.append((clean_path(active_venv_path), "RO"))
+
         for src, dst, ro, primary in binds:
             if not primary:
                 mode = "RO" if ro else "RW"
-                label = (
-                    f"{src} {string.stylize(f'-> {dst}', 'bold color.green')} ({mode})"
-                    if src != dst
-                    else f"{src} ({mode})"
-                )
-                console.print(f" • {label}")
+                if src == dst:
+                    infra_lines.append((clean_path(src), mode))
+                else:
+                    infra_lines.append((
+                        f"{clean_path(src)} {string.stylize(f'-> {clean_path(dst)}', 'bold color.green')}",
+                        mode
+                    ))
+
+        console.print(f"\n{string.stylize('INFRASTRUCTURE & REFERENCE (System/Source/Config):', 'bold color.cyan')}")
+        # Sort and deduplicate infra lines by the path string
+        seen_infra = set()
+        for path_str, mode in sorted(infra_lines, key=lambda x: x[0]):
+            unique_key = (path_str, mode)
+            if unique_key not in seen_infra:
+                seen_infra.add(unique_key)
+                console.print(f" • {string.stylize(path_str, 'color.purple')} ({mode})")
 
         if not self.yolo and not console.bypass_prompt:
-            return console.confirm("Do you want to proceed with this AI agent execution?", default=True)
+            agent_names = {
+                "claude": "Claude",
+                "gemini": "Gemini",
+                "copilot": "Copilot",
+                "opencode-cli": "OpenCode",
+            }
+            name = agent_names.get(self.cli, self.cli)
+
+            if self.model and self.model != "auto":
+                display_name = f"{name} ({self.model})"
+            else:
+                display_name = name
+
+            return console.confirm(
+                f"Do you want to proceed with the {display_name} AI agent execution?",
+                default=True,
+            )
         return True
 
     def _prepare_odev_config(self, playground: Path, host_home: Path) -> None:
