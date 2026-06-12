@@ -3,10 +3,10 @@ from .base import BaseAgentHandler
 
 class AgyHandler(BaseAgentHandler):
     def get_config_dirs(self):
-        return [".antigravity", ".config/antigravity"]
+        return [".antigravity", ".config/antigravity", ".gemini", ".config/gemini"]
 
     def get_persistent_dirs(self):
-        return [".antigravity", ".config/antigravity"]
+        return [".antigravity", ".config/antigravity", ".gemini", ".config/gemini"]
 
     def get_global_config_name(self):
         return ".antigravity.json"
@@ -15,7 +15,7 @@ class AgyHandler(BaseAgentHandler):
         return [".antigravity.json"]
 
     def get_creds_files(self):
-        return ["antigravity-credentials.json", "google_accounts.json", "oauth_creds.json"]
+        return ["antigravity-credentials.json", "gemini-credentials.json", "google_accounts.json", "oauth_creds.json"]
 
     def get_agent_config_rel_path(self):
         return ".antigravity"
