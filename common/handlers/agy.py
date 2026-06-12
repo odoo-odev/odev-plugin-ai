@@ -21,6 +21,23 @@ class AgyHandler(BaseAgentHandler):
         return ".antigravity"
 
     def get_command(self, prompt, resume, all_candidate_paths, model, headless, yolo):
+        import shutil
+        from pathlib import Path
+
+        home = Path.home()
+        agy_creds = home / ".antigravity" / "oauth_creds.json"
+        gemini_creds = home / ".gemini" / "oauth_creds.json"
+
+        if not agy_creds.exists() and gemini_creds.exists():
+            try:
+                (home / ".antigravity").mkdir(parents=True, exist_ok=True)
+                shutil.copy2(gemini_creds, agy_creds)
+                gemini_accts = home / ".gemini" / "google_accounts.json"
+                if gemini_accts.exists():
+                    shutil.copy2(gemini_accts, home / ".antigravity" / "google_accounts.json")
+            except Exception:
+                pass
+
         cmd = ["agy"]
         if prompt:
             cmd.extend(["-p" if headless else "-i", prompt])
