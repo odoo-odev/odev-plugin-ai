@@ -62,7 +62,7 @@ DENY_SYSTEM_SUBPATHS: tuple[str, ...] = (
 #: communications. Resolved relative to the running user's home dir.
 #:
 #: NOTE: ~/Library/Keychains is INTENTIONALLY NOT here. macOS apps (claude,
-#: gemini, …) authenticate to their LLM provider via Keychain; blocking
+#: agy, …) authenticate to their LLM provider via Keychain; blocking
 #: writes silently breaks /login flows. The Keychain has its own per-app
 #: ACL system anyway.
 DENY_USER_SECRETS_RELATIVE: tuple[str, ...] = (
@@ -424,7 +424,7 @@ class SeatbeltSandbox(Sandbox):
         logger.debug("Launcher: %s", launcher)
 
         # Hand off to odev's bash.run helper, which already sets up a raw TTY
-        # the way bwrap does on Linux — interactive TUIs (claude, gemini) need
+        # the way bwrap does on Linux — interactive TUIs (claude, agy) need
         # that to render correctly.
         from odev.common import bash
 

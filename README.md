@@ -32,6 +32,10 @@ following tools must be installed on your host system:
     # On Ubuntu/Debian
     sudo apt install nodejs npm
     ```
+-   **Antigravity CLI (agy)**: Recommended CLI for Antigravity AI capabilities.
+    ```bash
+    curl -fsSL https://antigravity.google/cli/install.sh | bash
+    ```
 
 ## Configuration
 

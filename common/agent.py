@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 
 
 class AgentCLI(OdevFrameworkMixin):
-    """An execution wrapper for CLI AI agents (claude, gemini, copilot).
+    """An execution wrapper for CLI AI agents (claude, agy, copilot).
 
     Composes a platform-specific sandbox backend (bwrap on Linux,
     sandbox-exec/Seatbelt on macOS) and an ephemeral PostgreSQL sandbox.
@@ -163,8 +163,8 @@ class AgentCLI(OdevFrameworkMixin):
         PostgresSandbox.cleanup_orphans()
 
         if resume == "latest":
-            if self.cli == "gemini":
-                # Gemini CLI natively supports --resume latest inside the sandbox
+            if self.cli == "agy":
+                # Agy CLI natively supports --resume latest inside the sandbox
                 pass
             else:
                 latest_id = self.get_latest_session_id()
@@ -262,8 +262,8 @@ class AgentCLI(OdevFrameworkMixin):
         """Return the ID of the most recent session for this agent CLI."""
         try:
             home = Path.home()
-            if self.cli == "gemini":
-                sessions_file = home / ".gemini" / "sessions.json"
+            if self.cli == "agy":
+                sessions_file = home / ".antigravity" / "sessions.json"
             elif self.cli in ("claude", "opencode-cli"):
                 sessions_file = home / ".claude" / "sessions.json"
             else:

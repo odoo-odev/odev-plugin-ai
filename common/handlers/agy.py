@@ -1,27 +1,27 @@
 from .base import BaseAgentHandler
 
 
-class GeminiHandler(BaseAgentHandler):
+class AgyHandler(BaseAgentHandler):
     def get_config_dirs(self):
-        return [".gemini", ".config/gemini"]
+        return [".antigravity", ".config/antigravity"]
 
     def get_persistent_dirs(self):
-        return [".gemini", ".config/gemini"]
+        return [".antigravity", ".config/antigravity"]
 
     def get_global_config_name(self):
-        return ".gemini.json"
+        return ".antigravity.json"
 
     def get_config_files(self):
-        return [".gemini.json"]
+        return [".antigravity.json"]
 
     def get_creds_files(self):
-        return ["gemini-credentials.json", "google_accounts.json", "oauth_creds.json"]
+        return ["antigravity-credentials.json", "google_accounts.json", "oauth_creds.json"]
 
     def get_agent_config_rel_path(self):
-        return ".gemini"
+        return ".antigravity"
 
     def get_command(self, prompt, resume, all_candidate_paths, model, headless, yolo):
-        cmd = ["gemini"]
+        cmd = ["agy"]
         if prompt:
             cmd.extend(["-p" if headless else "-i", prompt])
         if resume:

@@ -208,7 +208,7 @@ class Sandbox(OdevFrameworkMixin, ABC):
         if not self.yolo and not console.bypass_prompt:
             agent_names = {
                 "claude": "Claude",
-                "gemini": "Gemini",
+                "agy": "Agy",
                 "copilot": "Copilot",
                 "opencode-cli": "OpenCode",
             }
