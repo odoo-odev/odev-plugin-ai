@@ -25,11 +25,14 @@ class AgyHandler(BaseAgentHandler):
         if prompt:
             cmd.extend(["-p" if headless else "-i", prompt])
         if resume:
-            cmd.extend(["--resume", resume])
-        cmd.append("--approval-mode")
-        cmd.append("yolo" if yolo else "auto_edit")
+            if resume == "latest":
+                cmd.append("--continue")
+            else:
+                cmd.extend(["--conversation", resume])
+        if yolo:
+            cmd.append("--dangerously-skip-permissions")
         if model and model != "auto":
-            cmd.extend(["-m", model])
+            cmd.extend(["--model", model])
         for path in self._guest_paths(all_candidate_paths):
-            cmd.extend(["--include-directories", path])
+            cmd.extend(["--add-dir", path])
         return cmd
