@@ -220,6 +220,9 @@ class BwrapSandbox(Sandbox):
                 "--ro-bind-try",
                 str(host_home / ".local/bin"),
                 str(host_home / ".local/bin"),
+                "--ro-bind-try",
+                str(host_home / ".cargo/bin"),
+                str(host_home / ".cargo/bin"),
                 "--chdir",
                 cwd,
                 "--unshare-all",
@@ -298,6 +301,7 @@ class BwrapSandbox(Sandbox):
             ".local/share/fonts",
             ".npm-global",
             ".local/bin",
+            ".cargo/bin",
             ".local/share/Odoo",
             ".local/share/claude",
         ]:

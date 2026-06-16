@@ -364,6 +364,9 @@ class AICommandMixin:
                 f"npx -y skills add odoo-ps/ps-ai-skills --skills {skills_str}"
             )
 
+        if not shutil.which("py-spy"):
+            logger.warning("py-spy is not available. To use performance profiling, please install it (e.g., pip install py-spy or cargo install py-spy).")
+
         return agent.run(
             prompt,
             sandbox_dirs=sandbox_dirs,
