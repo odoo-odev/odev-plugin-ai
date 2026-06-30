@@ -40,9 +40,9 @@ class AICommandMixin:
 
     cli = args.String(
         aliases=["--cli"],
-        description="The CLI AI agent to use (claude, gemini, copilot, or opencode-cli).",
+        description="The CLI AI agent to use (claude, agy, copilot, or opencode-cli).",
         default=None,
-        choices=["claude", "gemini", "copilot", "opencode-cli"],
+        choices=["claude", "agy", "copilot", "opencode-cli"],
     )
 
     model = args.String(
@@ -94,7 +94,7 @@ class AICommandMixin:
             return
         install_hints = {
             "claude": "  npm install -g @anthropic-ai/claude-code",
-            "gemini": "  npm install -g @google/gemini-cli",
+            "agy": "  curl -fsSL https://antigravity.google/cli/install.sh | bash",
             "copilot": "  gh extension install github/gh-copilot",
             "opencode-cli": "  npm install -g opencode-cli",
         }
@@ -112,7 +112,7 @@ class AICommandMixin:
         """
         self._ensure_sandbox_supported()
 
-        all_clis = ["claude", "gemini", "copilot", "opencode-cli"]
+        all_clis = ["claude", "agy", "copilot", "opencode-cli"]
         chosen_cli = self.args.cli
         favorite_cli = self.config.ai.favorite_cli
 

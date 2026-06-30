@@ -1,0 +1,55 @@
+from .base import BaseAgentHandler
+
+
+class AgyHandler(BaseAgentHandler):
+    def get_config_dirs(self):
+        return [".antigravity", ".config/antigravity", ".gemini", ".config/gemini"]
+
+    def get_persistent_dirs(self):
+        return [".antigravity", ".config/antigravity", ".gemini", ".config/gemini"]
+
+    def get_global_config_name(self):
+        return ".antigravity.json"
+
+    def get_config_files(self):
+        return [".antigravity.json"]
+
+    def get_creds_files(self):
+        return ["antigravity-credentials.json", "gemini-credentials.json", "google_accounts.json", "oauth_creds.json"]
+
+    def get_agent_config_rel_path(self):
+        return ".antigravity"
+
+    def get_command(self, prompt, resume, all_candidate_paths, model, headless, yolo):
+        import shutil
+        from pathlib import Path
+
+        home = Path.home()
+        agy_creds = home / ".antigravity" / "oauth_creds.json"
+        gemini_creds = home / ".gemini" / "oauth_creds.json"
+
+        if not agy_creds.exists() and gemini_creds.exists():
+            try:
+                (home / ".antigravity").mkdir(parents=True, exist_ok=True)
+                shutil.copy2(gemini_creds, agy_creds)
+                gemini_accts = home / ".gemini" / "google_accounts.json"
+                if gemini_accts.exists():
+                    shutil.copy2(gemini_accts, home / ".antigravity" / "google_accounts.json")
+            except Exception:
+                pass
+
+        cmd = ["agy"]
+        if prompt:
+            cmd.extend(["-p" if headless else "-i", prompt])
+        if resume:
+            if resume == "latest":
+                cmd.append("--continue")
+            else:
+                cmd.extend(["--conversation", resume])
+        if yolo:
+            cmd.append("--dangerously-skip-permissions")
+        if model and model != "auto":
+            cmd.extend(["--model", model])
+        for path in self._guest_paths(all_candidate_paths):
+            cmd.extend(["--add-dir", path])
+        return cmd

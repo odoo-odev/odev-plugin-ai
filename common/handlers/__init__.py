@@ -1,6 +1,6 @@
 from .base import BaseAgentHandler
 from .claude import ClaudeHandler
-from .gemini import GeminiHandler
+from .agy import AgyHandler
 from .copilot import CopilotHandler
 from .opencode import OpenCodeHandler
 
@@ -8,7 +8,7 @@ from .opencode import OpenCodeHandler
 def get_agent_handler(cli, host_home, odev):
     handlers = {
         "claude": ClaudeHandler,
-        "gemini": GeminiHandler,
+        "agy": AgyHandler,
         "copilot": CopilotHandler,
         "opencode-cli": OpenCodeHandler,
     }
