@@ -100,6 +100,42 @@ class Sandbox(OdevFrameworkMixin, ABC):
 
     # --- shared helpers ------------------------------------------------------
 
+    @staticmethod
+    def _group_infra_items(items: list[tuple[Path, str]]) -> list[tuple[str, str]]:
+        """Sort and group infra paths by parent+mode for a compact display.
+
+        Paths that share the same parent directory *and* the same access mode
+        are collapsed into a single line:
+
+            /some/parent/{child_a, child_b} (RO)
+
+        Singletons are shown as-is. The final list is sorted alphabetically.
+        """
+        from collections import defaultdict
+
+        home = str(Path.home().resolve())
+
+        groups: dict[tuple[str, str], list[str]] = defaultdict(list)
+        for path, mode in items:
+            parent_str = str(path.parent.resolve())
+            if parent_str == home:
+                parent_str = "~"
+            elif parent_str.startswith(home + "/"):
+                parent_str = "~" + parent_str[len(home) :]
+
+            groups[(parent_str, mode)].append(path.name)
+
+        result: list[tuple[str, str]] = []
+        for (parent, mode), names in groups.items():
+            names_sorted = sorted(names)
+            if len(names_sorted) == 1:
+                path_str = f"{parent}/{names_sorted[0]}"
+            else:
+                path_str = f"{parent}/{{{', '.join(names_sorted)}}}"
+            result.append((path_str, mode))
+
+        return sorted(result, key=lambda x: x[0])
+
     def _display_sandbox_warning(
         self,
         binds: list[tuple[Path, Path, bool, bool]],
@@ -174,36 +210,51 @@ class Sandbox(OdevFrameworkMixin, ABC):
             )
 
         # Build list of infrastructure/reference paths
-        infra_lines: list[tuple[str, str]] = []
+        infra_items: list[tuple[Path, str]] = []
+        mapping_lines: list[tuple[str, str]] = []
+
         for d in agent_dirs:
-            infra_lines.append((clean_path(d), "RW"))
+            infra_items.append((d, "RW"))
         for f in agent_files:
             if f.exists():
-                infra_lines.append((clean_path(f), "RW"))
+                infra_items.append((f, "RW"))
         if odoo_filestore and odoo_filestore.exists():
-            infra_lines.append((clean_path(odoo_filestore), "RW"))
+            infra_items.append((odoo_filestore, "RW"))
         if active_venv_path and active_venv_path.exists():
-            infra_lines.append((clean_path(active_venv_path), "RO"))
+            infra_items.append((active_venv_path, "RO"))
 
         for src, dst, ro, primary in binds:
             if not primary:
                 mode = "RO" if ro else "RW"
                 if src == dst:
-                    infra_lines.append((clean_path(src), mode))
+                    infra_items.append((src, mode))
                 else:
-                    infra_lines.append((
+                    mapping_lines.append((
                         f"{clean_path(src)} {string.stylize(f'-> {clean_path(dst)}', 'bold color.green')}",
                         mode
                     ))
 
         console.print(f"\n{string.stylize('INFRASTRUCTURE & REFERENCE (System/Source/Config):', 'bold color.cyan')}")
-        # Sort and deduplicate infra lines by the path string
-        seen_infra = set()
-        for path_str, mode in sorted(infra_lines, key=lambda x: x[0]):
-            unique_key = (path_str, mode)
-            if unique_key not in seen_infra:
-                seen_infra.add(unique_key)
-                console.print(f" • {string.stylize(path_str, 'color.purple')} ({mode})")
+
+        # Deduplicate infra_items while preserving order
+        seen_items = set()
+        unique_infra_items = []
+        for path, mode in infra_items:
+            key = (path.resolve(), mode)
+            if key not in seen_items:
+                seen_items.add(key)
+                unique_infra_items.append((path, mode))
+
+        # Group and print plain paths
+        for path_str, mode in self._group_infra_items(unique_infra_items):
+            console.print(f" • {string.stylize(path_str, 'color.purple')} ({mode})")
+
+        # Deduplicate and print mapping lines
+        seen_mappings = set()
+        for line, mode in sorted(mapping_lines, key=lambda x: x[0]):
+            if line not in seen_mappings:
+                seen_mappings.add(line)
+                console.print(f" • {string.stylize(line, 'color.purple')} ({mode})")
 
         if not self.yolo and not console.bypass_prompt:
             agent_names = {
