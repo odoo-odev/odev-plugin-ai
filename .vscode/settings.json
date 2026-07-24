@@ -1,0 +1,4 @@
+{
+    // Odev and its plugins all run from the virtualenv created by `install.sh` in the Odev repository.
+    "python.defaultInterpreterPath": "~/.config/odev/venv/bin/python"
+}
