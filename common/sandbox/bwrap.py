@@ -288,7 +288,7 @@ class BwrapSandbox(Sandbox):
 
     # --- main entry ----------------------------------------------------------
 
-    def execute(self, spec: ExecutionSpec) -> bool:  # noqa: C901
+    def execute(self, spec: ExecutionSpec) -> bool:
         """Translate the spec into a bwrap argv and execute the agent."""
         host_home = Path.home().resolve()
 

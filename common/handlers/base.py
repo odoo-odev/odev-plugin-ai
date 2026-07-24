@@ -30,11 +30,11 @@ class BaseAgentHandler:
 
     def get_agent_config_rel_path(self):
         """Return the relative path to the agent's main configuration directory."""
-        return None
+        return
 
     def get_global_config_name(self):
         """Return name of global config file (e.g. .claude.json)."""
-        return None
+        return
 
     def inject_trust(self, target_dir, trusted_paths):
         """Inject trusted paths into the agent's config."""
@@ -53,7 +53,7 @@ class BaseAgentHandler:
 
     def get_command(self, prompt, resume, all_candidate_paths, model, headless, yolo):
         """Build the command line for the agent."""
-        raise NotImplementedError()
+        raise NotImplementedError
 
     def _guest_paths(self, all_candidate_paths: list[str]) -> list[str]:
         return all_candidate_paths

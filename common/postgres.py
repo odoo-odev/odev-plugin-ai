@@ -194,7 +194,7 @@ class PostgresSandbox(OdevFrameworkMixin):
         # Discover host socket directory
         candidates = [
             Path("/var/run/postgresql"),  # Linux package default
-            Path("/tmp"),                  # Homebrew default on macOS
+            Path("/tmp"),  # Homebrew default on macOS
             Path("/private/tmp"),
         ]
         host_socket_dir = next((p for p in candidates if p.exists() and any(p.glob(".s.PGSQL.*"))), None)

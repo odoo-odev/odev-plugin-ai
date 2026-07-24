@@ -365,7 +365,7 @@ class SeatbeltSandbox(Sandbox):
 
     # --- main entry ----------------------------------------------------------
 
-    def execute(self, spec: ExecutionSpec) -> bool:  # noqa: C901
+    def execute(self, spec: ExecutionSpec) -> bool:
         """Generate a Seatbelt profile, then run the agent under sandbox-exec."""
         host_home = Path.home().resolve()
 

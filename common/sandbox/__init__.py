@@ -29,9 +29,7 @@ def get_sandbox_class() -> type[Sandbox]:
         from .seatbelt import SeatbeltSandbox
 
         return SeatbeltSandbox
-    raise RuntimeError(
-        f"AI sandbox is only supported on Linux and macOS (detected platform: {sys.platform!r})."
-    )
+    raise RuntimeError(f"AI sandbox is only supported on Linux and macOS (detected platform: {sys.platform!r}).")
 
 
 def get_sandbox(

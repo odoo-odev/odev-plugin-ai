@@ -4,10 +4,10 @@ from typing import TYPE_CHECKING
 
 
 if TYPE_CHECKING:
-    from odev.common.odev import Odev
     from odev.common.args import Namespace
     from odev.common.config import Config
     from odev.common.console import Console
+    from odev.common.odev import Odev
 
 import shutil
 import subprocess
