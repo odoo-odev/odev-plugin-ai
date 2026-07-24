@@ -3,6 +3,7 @@ __pycache__
 .py[cod]
 .mypy_cache
 .pytest_cache
+.ruff_cache
 
 # --- Editor config
 .vscode
@@ -14,6 +15,24 @@ __pycache__
 .coverage
 .hypothesis
 htmlcov
+coverage.xml
 
 # --- Odev plugins, loaded as submodules
 tests/plugins/*
+
+# --- Temporary and testing files
+_*/
+tmp/
+
+# --- AI files
+.claude/
+.code-review-graph/
+.cursor/
+.agents/
+.gemini/
+CLAUDE.md
+GEMINI.md
+AGENTS.md
+
+# --- Temp macOS files
+.DS_Store
