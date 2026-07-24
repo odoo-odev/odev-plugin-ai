@@ -5,8 +5,9 @@ __pycache__
 .pytest_cache
 .ruff_cache
 
-# --- Editor config
-.vscode
+# --- Editor config, `settings.json` is shared, everything else is machine-local
+.vscode/*
+!.vscode/settings.json
 
 # --- Misc. operating files
 .history
