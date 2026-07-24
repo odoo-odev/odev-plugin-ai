@@ -1,0 +1,436 @@
+{
+  "files": {
+    "./__init__.py": [
+      {
+        "code": "reportAttributeAccessIssue",
+        "range": {
+          "endColumn": 31,
+          "lineCount": 1,
+          "startColumn": 9
+        }
+      }
+    ],
+    "./commands/ai.py": [
+      {
+        "code": "reportIncompatibleVariableOverride",
+        "range": {
+          "endColumn": 15,
+          "lineCount": 1,
+          "startColumn": 6
+        }
+      },
+      {
+        "code": "reportIncompatibleVariableOverride",
+        "range": {
+          "endColumn": 15,
+          "lineCount": 1,
+          "startColumn": 6
+        }
+      },
+      {
+        "code": "reportIncompatibleVariableOverride",
+        "range": {
+          "endColumn": 15,
+          "lineCount": 1,
+          "startColumn": 6
+        }
+      }
+    ],
+    "./commands/pre_commit.py": [
+      {
+        "code": "reportIncompatibleVariableOverride",
+        "range": {
+          "endColumn": 15,
+          "lineCount": 1,
+          "startColumn": 6
+        }
+      },
+      {
+        "code": "reportIncompatibleVariableOverride",
+        "range": {
+          "endColumn": 15,
+          "lineCount": 1,
+          "startColumn": 6
+        }
+      },
+      {
+        "code": "reportIncompatibleVariableOverride",
+        "range": {
+          "endColumn": 15,
+          "lineCount": 1,
+          "startColumn": 6
+        }
+      },
+      {
+        "code": "reportArgumentType",
+        "range": {
+          "endColumn": 42,
+          "lineCount": 1,
+          "startColumn": 41
+        }
+      },
+      {
+        "code": "reportArgumentType",
+        "range": {
+          "endColumn": 56,
+          "lineCount": 1,
+          "startColumn": 44
+        }
+      },
+      {
+        "code": "reportArgumentType",
+        "range": {
+          "endColumn": 57,
+          "lineCount": 1,
+          "startColumn": 41
+        }
+      }
+    ],
+    "./commands/run.py": [
+      {
+        "code": "reportIncompatibleVariableOverride",
+        "range": {
+          "endColumn": 16,
+          "lineCount": 1,
+          "startColumn": 6
+        }
+      },
+      {
+        "code": "reportIncompatibleVariableOverride",
+        "range": {
+          "endColumn": 16,
+          "lineCount": 1,
+          "startColumn": 6
+        }
+      },
+      {
+        "code": "reportIncompatibleVariableOverride",
+        "range": {
+          "endColumn": 16,
+          "lineCount": 1,
+          "startColumn": 6
+        }
+      }
+    ],
+    "./commands/test.py": [
+      {
+        "code": "reportIncompatibleVariableOverride",
+        "range": {
+          "endColumn": 17,
+          "lineCount": 1,
+          "startColumn": 6
+        }
+      },
+      {
+        "code": "reportIncompatibleVariableOverride",
+        "range": {
+          "endColumn": 17,
+          "lineCount": 1,
+          "startColumn": 6
+        }
+      },
+      {
+        "code": "reportIncompatibleVariableOverride",
+        "range": {
+          "endColumn": 17,
+          "lineCount": 1,
+          "startColumn": 6
+        }
+      }
+    ],
+    "./common/handlers/agy.py": [
+      {
+        "code": "reportIncompatibleMethodOverride",
+        "range": {
+          "endColumn": 30,
+          "lineCount": 1,
+          "startColumn": 8
+        }
+      },
+      {
+        "code": "reportIncompatibleMethodOverride",
+        "range": {
+          "endColumn": 33,
+          "lineCount": 1,
+          "startColumn": 8
+        }
+      }
+    ],
+    "./common/handlers/claude.py": [
+      {
+        "code": "reportIncompatibleMethodOverride",
+        "range": {
+          "endColumn": 30,
+          "lineCount": 1,
+          "startColumn": 8
+        }
+      },
+      {
+        "code": "reportIncompatibleMethodOverride",
+        "range": {
+          "endColumn": 33,
+          "lineCount": 1,
+          "startColumn": 8
+        }
+      }
+    ],
+    "./common/handlers/copilot.py": [
+      {
+        "code": "reportIncompatibleMethodOverride",
+        "range": {
+          "endColumn": 33,
+          "lineCount": 1,
+          "startColumn": 8
+        }
+      }
+    ],
+    "./common/mixins.py": [
+      {
+        "code": "reportMissingImports",
+        "range": {
+          "endColumn": 25,
+          "lineCount": 1,
+          "startColumn": 9
+        }
+      },
+      {
+        "code": "reportUnboundVariable",
+        "range": {
+          "endColumn": 14,
+          "lineCount": 1,
+          "startColumn": 10
+        }
+      },
+      {
+        "code": "reportAttributeAccessIssue",
+        "range": {
+          "endColumn": 21,
+          "lineCount": 1,
+          "startColumn": 15
+        }
+      },
+      {
+        "code": "reportUnboundVariable",
+        "range": {
+          "endColumn": 16,
+          "lineCount": 1,
+          "startColumn": 12
+        }
+      },
+      {
+        "code": "reportAttributeAccessIssue",
+        "range": {
+          "endColumn": 23,
+          "lineCount": 1,
+          "startColumn": 17
+        }
+      },
+      {
+        "code": "reportUnboundVariable",
+        "range": {
+          "endColumn": 15,
+          "lineCount": 1,
+          "startColumn": 11
+        }
+      },
+      {
+        "code": "reportAttributeAccessIssue",
+        "range": {
+          "endColumn": 20,
+          "lineCount": 1,
+          "startColumn": 16
+        }
+      },
+      {
+        "code": "reportUnboundVariable",
+        "range": {
+          "endColumn": 19,
+          "lineCount": 1,
+          "startColumn": 15
+        }
+      },
+      {
+        "code": "reportAttributeAccessIssue",
+        "range": {
+          "endColumn": 24,
+          "lineCount": 1,
+          "startColumn": 20
+        }
+      },
+      {
+        "code": "reportUnboundVariable",
+        "range": {
+          "endColumn": 17,
+          "lineCount": 1,
+          "startColumn": 13
+        }
+      },
+      {
+        "code": "reportAttributeAccessIssue",
+        "range": {
+          "endColumn": 24,
+          "lineCount": 1,
+          "startColumn": 18
+        }
+      },
+      {
+        "code": "reportUnboundVariable",
+        "range": {
+          "endColumn": 15,
+          "lineCount": 1,
+          "startColumn": 11
+        }
+      },
+      {
+        "code": "reportAttributeAccessIssue",
+        "range": {
+          "endColumn": 20,
+          "lineCount": 1,
+          "startColumn": 16
+        }
+      },
+      {
+        "code": "reportCallIssue",
+        "range": {
+          "endColumn": 38,
+          "lineCount": 1,
+          "startColumn": 18
+        }
+      },
+      {
+        "code": "reportCallIssue",
+        "range": {
+          "endColumn": 83,
+          "lineCount": 1,
+          "startColumn": 18
+        }
+      },
+      {
+        "code": "reportCallIssue",
+        "range": {
+          "endColumn": 69,
+          "lineCount": 1,
+          "startColumn": 14
+        }
+      },
+      {
+        "code": "reportAttributeAccessIssue",
+        "range": {
+          "endColumn": 37,
+          "lineCount": 1,
+          "startColumn": 35
+        }
+      },
+      {
+        "code": "reportAttributeAccessIssue",
+        "range": {
+          "endColumn": 30,
+          "lineCount": 1,
+          "startColumn": 28
+        }
+      },
+      {
+        "code": "reportAttributeAccessIssue",
+        "range": {
+          "endColumn": 30,
+          "lineCount": 1,
+          "startColumn": 28
+        }
+      },
+      {
+        "code": "reportAttributeAccessIssue",
+        "range": {
+          "endColumn": 30,
+          "lineCount": 1,
+          "startColumn": 28
+        }
+      },
+      {
+        "code": "reportAttributeAccessIssue",
+        "range": {
+          "endColumn": 39,
+          "lineCount": 1,
+          "startColumn": 37
+        }
+      },
+      {
+        "code": "reportAttributeAccessIssue",
+        "range": {
+          "endColumn": 26,
+          "lineCount": 1,
+          "startColumn": 24
+        }
+      },
+      {
+        "code": "reportAttributeAccessIssue",
+        "range": {
+          "endColumn": 30,
+          "lineCount": 1,
+          "startColumn": 28
+        }
+      }
+    ],
+    "./common/postgres.py": [
+      {
+        "code": "reportOptionalMemberAccess",
+        "range": {
+          "endColumn": 27,
+          "lineCount": 1,
+          "startColumn": 22
+        }
+      }
+    ],
+    "./common/sandbox/bwrap.py": [
+      {
+        "code": "reportAttributeAccessIssue",
+        "range": {
+          "endColumn": 45,
+          "lineCount": 1,
+          "startColumn": 34
+        }
+      },
+      {
+        "code": "reportArgumentType",
+        "range": {
+          "endColumn": 58,
+          "lineCount": 1,
+          "startColumn": 42
+        }
+      },
+      {
+        "code": "reportAttributeAccessIssue",
+        "range": {
+          "endColumn": 47,
+          "lineCount": 1,
+          "startColumn": 34
+        }
+      }
+    ],
+    "./config.py": [
+      {
+        "code": "reportReturnType",
+        "range": {
+          "endColumn": 34,
+          "lineCount": 1,
+          "startColumn": 15
+        }
+      },
+      {
+        "code": "reportReturnType",
+        "range": {
+          "endColumn": 61,
+          "lineCount": 1,
+          "startColumn": 15
+        }
+      },
+      {
+        "code": "reportOptionalMemberAccess",
+        "range": {
+          "endColumn": 57,
+          "lineCount": 1,
+          "startColumn": 52
+        }
+      }
+    ]
+  }
+}
