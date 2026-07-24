@@ -189,7 +189,11 @@ class Sandbox(OdevFrameworkMixin, ABC):
             return p_str
 
         for src, dst, _ro, _primary in primary_binds:
-            label = f"{clean_path(src)} {string.stylize(f'-> {clean_path(dst)}', 'bold color.green')}" if src != dst else clean_path(src)
+            label = (
+                f"{clean_path(src)} {string.stylize(f'-> {clean_path(dst)}', 'bold color.green')}"
+                if src != dst
+                else clean_path(src)
+            )
             console.print(f" • {label}")
 
         console.print(f"\n{string.stylize('DATABASE ACCESS:', 'bold color.cyan')}")
@@ -229,10 +233,9 @@ class Sandbox(OdevFrameworkMixin, ABC):
                 if src == dst:
                     infra_items.append((src, mode))
                 else:
-                    mapping_lines.append((
-                        f"{clean_path(src)} {string.stylize(f'-> {clean_path(dst)}', 'bold color.green')}",
-                        mode
-                    ))
+                    mapping_lines.append(
+                        (f"{clean_path(src)} {string.stylize(f'-> {clean_path(dst)}', 'bold color.green')}", mode)
+                    )
 
         console.print(f"\n{string.stylize('INFRASTRUCTURE & REFERENCE (System/Source/Config):', 'bold color.cyan')}")
 
@@ -360,7 +363,7 @@ class Sandbox(OdevFrameworkMixin, ABC):
 
         return None
 
-    def _prepare_agent_config(  # noqa: C901
+    def _prepare_agent_config(
         self,
         playground: Path,
         all_candidate_paths: list[str],

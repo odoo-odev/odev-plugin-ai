@@ -1,6 +1,5 @@
 """Launch an AI CLI agent sandboxed with bwrap."""
 
-
 from odev.common import args
 from odev.common.commands import DatabaseCommand
 from odev.common.logging import logging
