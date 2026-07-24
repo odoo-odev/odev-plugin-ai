@@ -82,6 +82,7 @@ ignore = [
     "FBT001",   # boolean-typed positional argument in function definition
     "FBT002",   # boolean default positional argument in function definition
     "N812",     # lowercase imported as non lowercase
+    "N999",     # invalid module name - plugin directories use dashes, imported as odev.plugins.<underscore_name>
     "PERF203",  # try-except within a for loop incurs performance overhead
     "RUF012",   # mutable class attributes should be annotated with typing.ClassVar
     "S404",     # usage of `subprocess` module
