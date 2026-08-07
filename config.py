@@ -1,4 +1,7 @@
-from odev.common.config import Section
+from datetime import datetime, timedelta
+from typing import cast
+
+from odev.common.config import DATETIME_FORMAT, Section
 
 
 class AiSection(Section):
@@ -42,3 +45,38 @@ class SkillsSection(Section):
     @disabled.setter
     def disabled(self, value: list[str]):
         self.set("disabled", ",".join(value))
+
+    @property
+    def date(self) -> datetime:
+        """Last time the skills repository was pulled from GitHub.
+        You should not have to modify this value as it is updated automatically.
+        """
+        value = self.get("date")
+
+        if not value:
+            return datetime.fromtimestamp(0)
+
+        return datetime.strptime(value, DATETIME_FORMAT)
+
+    @date.setter
+    def date(self, value: str | datetime):
+        self.set("date", value.strftime(DATETIME_FORMAT) if isinstance(value, datetime) else value)
+
+    @property
+    def interval(self) -> int:
+        """Interval in days between two pulls of the skills repository. Defaults to 7 days."""
+        return int(cast(str, self.get("interval", "7")))
+
+    @interval.setter
+    def interval(self, value: str | int):
+        if not str(value).isdigit() or int(value) < 0:
+            raise ValueError(f"'skills.interval' must be a positive integer, got {value!r}")
+
+        self.set("interval", str(value))
+
+    def is_pull_needed(self) -> bool:
+        """Whether the skills repository should be pulled again.
+
+        Not a property: read-only properties break `Config.fill_defaults()`.
+        """
+        return datetime.now() >= self.date + timedelta(days=self.interval)

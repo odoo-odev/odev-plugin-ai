@@ -10,7 +10,6 @@ if TYPE_CHECKING:
     from odev.common.odev import Odev
 
 import shutil
-import subprocess
 from pathlib import Path
 
 from odev.common import args
@@ -20,6 +19,7 @@ from odev.common.logging import logging
 
 from odev.plugins.odev_plugin_ai.common.agent import AgentCLI
 from odev.plugins.odev_plugin_ai.common.sandbox import get_sandbox_class
+from odev.plugins.odev_plugin_ai.common.skills import ensure_skills
 
 
 logger = logging.getLogger(__name__)
@@ -314,24 +314,6 @@ class AICommandMixin:
 
         return [str(target_dir)]
 
-    def _get_loaded_skills(self) -> list[str]:
-        """Check loaded skills using npx skills list -g --json."""
-        try:
-            import json
-
-            result = subprocess.run(
-                ["npx", "-y", "skills", "list", "-g", "--json"],
-                capture_output=True,
-                text=True,
-                check=False,
-            )
-            if result.returncode == 0:
-                data = json.loads(result.stdout)
-                return [s["name"] for s in data if "name" in s]
-        except Exception:
-            pass
-        return []
-
     def run_ai_agent(
         self,
         prompt: str,
@@ -348,21 +330,7 @@ class AICommandMixin:
 
         agent = self.get_ai_agent()
 
-        # Check for missing skills via npx skills list -g
-        loaded_skills = self._get_loaded_skills()
-        missing_skills = []
-        if "odev" not in loaded_skills:
-            missing_skills.append("odev")
-        if self._name == "test" and "test_skill" not in loaded_skills:
-            missing_skills.append("test_skill")
-
-        if missing_skills:
-            skills_str = " ".join(missing_skills)
-            logger.warning(
-                f"The following skill(s) are missing: {', '.join(missing_skills)}. "
-                "For a better experience, you can load them by running:\n"
-                f"npx -y skills add odoo-ps/ps-ai-skills --skills {skills_str}"
-            )
+        ensure_skills(self.odev, self.config)
 
         return agent.run(
             prompt,
