@@ -9,10 +9,7 @@ if TYPE_CHECKING:
     from odev.common.console import Console
     from odev.common.odev import Odev
 
-import json
 import shutil
-import subprocess
-from datetime import datetime
 from pathlib import Path
 
 from odev.common import args
@@ -24,11 +21,11 @@ from odev.common.version import OdooVersion
 
 from odev.plugins.odev_plugin_ai.common.agent import AgentCLI
 from odev.plugins.odev_plugin_ai.common.sandbox import get_sandbox_class
+from odev.plugins.odev_plugin_ai.common.skills import ensure_skills
 
 
 logger = logging.getLogger(__name__)
 
-SKILLS_REPO = "odoo-ps/ps-ai-skills"
 GUIDELINES_SKILL = "odoo_coding_guidelines"
 """Skill carrying how Odoo code is written: module layout, per-language conventions, and
 what a change is allowed to touch.
@@ -38,20 +35,6 @@ agent in front of a client's checkout, and the rule that a dev reformats nothing
 not asked to reformat - and runs pre-commit only where the repository configures it -
 holds whether the agent is scaffolding a module, fixing a test or reading the code.
 """
-
-# Shared store the skills CLI installs into, whatever the agent.
-SKILLS_STORE = Path.home() / ".agents" / "skills"
-
-SKILLS_TIMEOUT = 120
-"""How long the skills CLI is given to answer, in seconds.
-
-Generous: installing clones the skills repo, which on a cold run is a network round trip.
-It is a ceiling on a hang, not a budget for a normal call."""
-
-
-def _newest_mtime(directory: Path) -> float:
-    """Return the most recent mtime found anywhere under the given directory."""
-    return max((p.stat().st_mtime for p in directory.rglob("*")), default=0.0)
 
 
 class AICommandMixin:
@@ -445,197 +428,6 @@ class AICommandMixin:
 
         return [str(target_dir)]
 
-    @staticmethod
-    def _run_skills_cli(*arguments: str) -> subprocess.CompletedProcess | None:
-        """Run the skills CLI through npx, returning None if it could not be run.
-
-        Its output is captured, which means anything it asks is asked of a terminal that
-        cannot show the question: a clone wanting an SSH passphrase or a host key
-        confirmed would read from a stdin nobody is watching and never come back, with
-        the run stopped on "Loading missing skill(s)..." and no way to tell why. Closed
-        stdin turns that into a refusal, and the timeout into a warning - a skill that
-        cannot be fetched degrades the run, it does not end it.
-        """
-        npx = shutil.which("npx")
-        if not npx:
-            logger.debug("Could not find 'npx' in PATH; skipping the skills check.")
-            return None
-        try:
-            return subprocess.run(  # noqa: S603 - the arguments are built here, never user input
-                [npx, "-y", "skills", *arguments],
-                capture_output=True,
-                text=True,
-                check=False,
-                stdin=subprocess.DEVNULL,
-                timeout=SKILLS_TIMEOUT,
-            )
-        except subprocess.TimeoutExpired:
-            logger.warning(
-                f"The skills CLI did not answer within {SKILLS_TIMEOUT}s "
-                f"(skills {' '.join(arguments)}); continuing without it."
-            )
-            return None
-        except OSError as e:
-            logger.debug(f"Could not run the skills CLI: {e}")
-            return None
-
-    def _get_loaded_skills(self) -> list[str]:
-        """Check loaded skills using npx skills list -g --json."""
-        result = self._run_skills_cli("list", "-g", "--json")
-        if result is None or result.returncode != 0:
-            return []
-        try:
-            data = json.loads(result.stdout)
-        except ValueError as e:
-            logger.debug(f"Could not parse the skills listing: {e}")
-            return []
-        return [s["name"] for s in data if "name" in s]
-
-    def _skills_package(self) -> str:
-        """Return the skills repository to install from, on odev's release channel.
-
-        odev tracks a branch - ``main`` or ``beta`` - and checks its plugins out on it;
-        the skills those plugins point at live in the same two branches of their own
-        repository, and a beta plugin asking a main skill for the method it works by is
-        the sort of mismatch that shows up as an agent doing something no code in the
-        checkout can explain. Anything else in ``update.release`` names a branch of odev
-        rather than of the skills repository, so the default branch is asked for instead.
-        """
-        release = self.config.update.release
-        return f"{SKILLS_REPO}#{release}" if release in ("main", "beta") else SKILLS_REPO
-
-    @staticmethod
-    def _skill_arguments(skills: list[str]) -> list[str]:
-        """Return the arguments naming the given skills to the skills CLI.
-
-        One ``--skill`` per name: the option takes a single skill, and a comma-joined
-        list is read as one name matching nothing - the CLI then refuses the whole call
-        with "No matching skills found", which is how every run missing more than one
-        skill installed none of them. Singular too: ``--skills`` is not an option the
-        CLI knows, and an unknown option is ignored rather than refused, which quietly
-        installed every skill of the repository on every call.
-        """
-        return [argument for skill in skills for argument in ("--skill", skill)]
-
-    def _install_skills(self, skills: list[str]) -> list[str]:
-        """Install skills globally from the PS skills repo, return those still missing."""
-        package = self._skills_package()
-        logger.info(f"Loading missing skill(s) from {package}: {', '.join(skills)}...")
-        result = self._run_skills_cli("add", package, *self._skill_arguments(skills), "-g")
-        if result is None:
-            return skills
-
-        # The installer exits 0 even when it fails for individual agent targets
-        # (e.g. agents that do not support global installs), so the only reliable
-        # check is to ask for the list again.
-        still_missing = [s for s in skills if s not in self._get_loaded_skills()]
-        if still_missing or result.returncode:
-            logger.debug(f"skills add exited with {result.returncode}:\n{result.stdout or result.stderr}")
-        return still_missing
-
-    def _refresh_skills(self, skills: list[str]) -> None:
-        """Fetch the given skills again, overwriting the copies already installed.
-
-        Installing only what is missing leaves a store that never changes: a skill
-        installed once stayed at the revision it was installed at, so a rule added to it
-        reached the agents that had never loaded it and no one else. The store is the
-        agents' only copy - they read ~/.agents/skills, not the checkout - so it has to
-        be brought forward on its own.
-
-        Rate-limited by ``skills.interval`` rather than done on every run: a refresh
-        clones the skills repository, and paying a network round trip to start every
-        agent is how a check like this ends up being turned off. Failures are silent by
-        design - the skills already installed still work, and a run is not worth losing
-        over a fetch that did not answer.
-
-        Note that this overwrites a skill edited in place: the store is a checkout of the
-        repository, not somewhere to keep local changes. Edit the repository and let the
-        refresh bring them down.
-        """
-        if not self.config.skills.is_refresh_needed():
-            return
-
-        logger.debug(f"Refreshing the installed skill(s): {', '.join(skills)}...")
-
-        # `update`, not `add`: adding a skill that is already installed is a no-op, which
-        # is why the store never moved. Update compares the hash of the upstream skill
-        # folder against the one recorded at install time and refetches on a mismatch -
-        # so it costs nothing when nothing changed, and overwrites when something did.
-        if self._run_skills_cli("update", *skills, "-g", "-y") is None:
-            return
-
-        # Recorded on the attempt rather than on a verified result: what the CLI
-        # overwrote cannot be told apart from what it left alone, and a store that
-        # cannot be refreshed should still not be retried on every command.
-        self.config.skills.date = datetime.now()
-
-    def _mirror_skills(self, skills: list[str], skills_dir: Path) -> list[str]:
-        """Copy skills from the shared store into an agent-specific directory.
-
-        The skills CLI only maintains ~/.agents/skills and symlinks it into
-        ~/.claude/skills; agents reading from their own directory see nothing.
-        Files are copied rather than symlinked because that is what the CLI
-        itself does for those agents, and agy does not follow symlinks.
-        """
-        failed = []
-        for skill in skills:
-            source = SKILLS_STORE / skill
-            target = skills_dir / skill
-            if not source.is_dir():
-                failed.append(skill)
-                continue
-            try:
-                if target.is_dir() and _newest_mtime(target) >= _newest_mtime(source):
-                    continue
-                skills_dir.mkdir(parents=True, exist_ok=True)
-                # Overwrite in place rather than replacing the directory, so any
-                # file the user added next to the skill survives the refresh.
-                shutil.copytree(source, target, dirs_exist_ok=True)
-                logger.debug(f"Mirrored the {skill!r} skill into {skills_dir}.")
-            except (OSError, shutil.Error) as e:
-                logger.debug(f"Could not mirror the {skill!r} skill into {skills_dir}: {e}")
-                failed.append(skill)
-        return failed
-
-    def _ensure_skills(self, required: list[str], handler=None) -> None:
-        """Make sure the given skills are loaded, installing the missing ones.
-
-        Installs rather than suggests: a warning telling the developer to run a command
-        themselves is a warning scrolled past, and the agent then works without the
-        method its prompt sends it to - silently, since a missing skill looks exactly
-        like an agent that chose not to read one.
-        """
-        if handler is not None:
-            handler.ensure_skills_discoverable()
-
-        disabled = self.config.skills.disabled
-        wanted = [s for s in required if s not in disabled]
-        if not wanted:
-            return
-
-        installed = self._get_loaded_skills()
-        missing = [s for s in wanted if s not in installed]
-        still_missing = self._install_skills(missing) if missing else []
-
-        # The ones that were already there, which installing would not have touched.
-        if already_installed := [s for s in wanted if s in installed]:
-            self._refresh_skills(already_installed)
-
-        # Agents the skills CLI does not install to need the files copied over.
-        skills_dir = handler.get_global_skills_dir() if handler else None
-        if skills_dir:
-            still_missing += self._mirror_skills([s for s in wanted if s not in still_missing], skills_dir)
-
-        if still_missing:
-            logger.warning(
-                f"The following skill(s) are missing: {', '.join(still_missing)}. "
-                "For a better experience, you can load them by running:\n"
-                f"npx -y skills add {self._skills_package()} "
-                f"{' '.join(self._skill_arguments(still_missing))} -g"
-            )
-        elif missing:
-            logger.info(f"Loaded skill(s): {', '.join(missing)}")
-
     def run_ai_agent(  # noqa: PLR0913 - carries the full context of one agent run
         self,
         prompt: str,
@@ -655,7 +447,8 @@ class AICommandMixin:
 
         agent = self.get_ai_agent()
 
-        self._ensure_skills(self.required_skills, handler=agent.handler)
+        agent.handler.ensure_skills_discoverable()
+        ensure_skills(self.odev, self.config, self.required_skills)
 
         return agent.run(
             prompt,

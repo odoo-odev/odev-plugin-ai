@@ -7,6 +7,13 @@ logger = logging.getLogger(__name__)
 
 
 class OpenCodeHandler(ClaudeHandler):
+    def get_config_dirs(self):
+        # ~/.config/opencode holds the global skills directory of OpenCode
+        return [*super().get_config_dirs(), ".config/opencode"]
+
+    def get_persistent_dirs(self):
+        return [*super().get_persistent_dirs(), ".config/opencode"]
+
     def get_latest_session_id(self, cwd=None):
         """Return nothing: opencode keeps its sessions somewhere else.
 
