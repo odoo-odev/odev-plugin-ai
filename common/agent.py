@@ -62,6 +62,8 @@ class AgentCLI(OdevFrameworkMixin):
             host_home / ".claude",
             host_home / ".agents",
             host_home / ".antigravity",
+            # Skills are symlinked into the agents' config dirs from this clone
+            self.odev.home_path / "skills",
         ]
         agent_files = [
             host_home / ".gitconfig",
