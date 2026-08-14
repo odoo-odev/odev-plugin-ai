@@ -10,7 +10,7 @@ def get_agent_handler(cli, host_home, odev):
         "claude": ClaudeHandler,
         "agy": AgyHandler,
         "copilot": CopilotHandler,
-        "opencode-cli": OpenCodeHandler,
+        "opencode": OpenCodeHandler,
     }
     handler_cls = handlers.get(cli, BaseAgentHandler)
     return handler_cls(cli, host_home, odev)
