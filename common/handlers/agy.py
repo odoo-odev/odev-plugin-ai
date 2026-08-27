@@ -20,7 +20,9 @@ class AgyHandler(BaseAgentHandler):
     def get_agent_config_rel_path(self):
         return ".antigravity"
 
-    def get_command(self, prompt, resume, all_candidate_paths, model, headless, yolo):
+    def get_command(
+        self, prompt, resume, all_candidate_paths, model, headless, yolo, mcp_config=None, mcp_server_names=()
+    ):
         import shutil
         from pathlib import Path
 

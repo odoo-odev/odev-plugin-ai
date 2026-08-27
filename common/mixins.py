@@ -74,6 +74,15 @@ class AICommandMixin:
         default=[],
     )
 
+    version = args.String(
+        aliases=["-V", "--version"],
+        description="""Launch the AI agent in the worktree directory of a specific Odoo version
+        (e.g. 17.0, saas-17.2, master) instead of a database's linked repository. The worktree is
+        created and updated automatically if needed. Takes precedence over a database's repository
+        path if both a database and a version are given.""",
+        default=None,
+    )
+
     def _ensure_sandbox_supported(self) -> None:
         """Verify that this host can run the AI sandbox; raise otherwise."""
         try:
@@ -270,13 +279,25 @@ class AICommandMixin:
             available[version] = worktree_path.exists()
         return available
 
-    def _get_sandbox_dirs(self, database_name: str | None = None, cwd: Path | None = None) -> list[str]:
+    def _get_sandbox_dirs(
+        self, database_name: str | None = None, version: str | None = None, cwd: Path | None = None
+    ) -> list[str]:
         """Return the list of directories to include in the sandbox.
 
         The first directory in the list will be used as the working directory.
-        If a database is provided, we try to use its repository path as the
-        working directory.
+        If a version is provided, we use the Odoo worktree for that version.
+        Otherwise, if a database is provided, we try to use its repository path
+        as the working directory.
         """
+        if version:
+            from odev.common.version import OdooVersion
+
+            normalized_version = str(OdooVersion(version))
+            available = self._prepare_odoo_environment([normalized_version])
+            if available.get(normalized_version):
+                return [str((self.odev.worktrees_path / normalized_version).resolve())]
+            logger.warning(f"Could not prepare a worktree for Odoo {normalized_version}, falling back.")
+
         if database_name:
             from odev.common.databases.local import LocalDatabase
 
@@ -336,10 +357,17 @@ class AICommandMixin:
         self,
         prompt: str,
         database: str | None = None,
+        version: str | None = None,
         ephemeral_pg: bool = True,
+        mcp_servers: dict[str, dict] | None = None,
+        extra_ro_bind_dirs: list[str] | None = None,
     ) -> bool:
-        """Helper to run the AI agent with common Odoo-related sandbox paths."""
-        sandbox_dirs = self._get_sandbox_dirs(database)
+        """Helper to run the AI agent with common Odoo-related sandbox paths.
+
+        ``extra_ro_bind_dirs`` are mounted readable but not writable, on top of the
+        read-write dirs the caller passes through -d/--dirs.
+        """
+        sandbox_dirs = self._get_sandbox_dirs(database, version or self.args.version)
 
         if database:
             should_clone = self._ensure_database_safety(database)
@@ -368,7 +396,9 @@ class AICommandMixin:
             prompt,
             sandbox_dirs=sandbox_dirs,
             extra_bind_dirs=[str(d) for d in self.args.dirs] or None,
+            extra_ro_bind_dirs=extra_ro_bind_dirs or None,
             database=database,
             resume=self.args.resume,
             ephemeral_pg=ephemeral_pg,
+            mcp_servers=mcp_servers,
         )
