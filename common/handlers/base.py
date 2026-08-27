@@ -54,6 +54,14 @@ class BaseAgentHandler:
     def cleanup_junk(self, target_dir):
         """Clean up junk files that might cause leakage or crashes."""
 
+    @classmethod
+    def ensure_skills_discoverable(cls) -> None:
+        """Reconcile where the `skills` CLI installs skills with where this agent looks for them.
+
+        Called before suggesting a `skills add` command; override when this agent's global
+        skills directory differs from what the `skills` npm package targets for it.
+        """
+
     def get_command(
         self, prompt, resume, all_candidate_paths, model, headless, yolo, mcp_config=None, mcp_server_names=()
     ):

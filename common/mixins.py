@@ -344,43 +344,6 @@ class AICommandMixin:
         "opencode-cli": "opencode",
     }
 
-    def _ensure_antigravity_skills_symlink(self) -> None:
-        """Make `~/.gemini/config/skills` resolve to the canonical Antigravity skills dir.
-
-        The `skills` CLI installs Antigravity skills under `~/.gemini/antigravity/skills`,
-        but Antigravity itself discovers global skills under `~/.gemini/config/skills`.
-        Symlinking the latter to the former lets a single `skills add -g -a antigravity`
-        satisfy both. If `~/.gemini/config/skills` already exists as a real directory
-        (e.g. skills copied there manually), its contents are migrated into the
-        canonical directory first.
-        """
-        home = Path.home()
-        target = home / ".gemini" / "antigravity" / "skills"
-        link = home / ".gemini" / "config" / "skills"
-
-        try:
-            if link.is_symlink():
-                if link.resolve() != target.resolve():
-                    logger.warning(f"{link} is a symlink to an unexpected location, leaving it as-is.")
-                return
-
-            if link.exists():
-                target.mkdir(parents=True, exist_ok=True)
-                for item in link.iterdir():
-                    dest = target / item.name
-                    if dest.exists():
-                        logger.warning(f"Skipping migration of {item}, {dest} already exists.")
-                        continue
-                    shutil.move(str(item), str(dest))
-                link.rmdir()
-
-            link.parent.mkdir(parents=True, exist_ok=True)
-            target.mkdir(parents=True, exist_ok=True)
-            link.symlink_to(target, target_is_directory=True)
-            logger.info(f"Linked {link} -> {target} so Antigravity can discover installed skills.")
-        except OSError as e:
-            logger.warning(f"Could not set up the Antigravity skills symlink: {e}")
-
     def _get_loaded_skills(self) -> list[str]:
         """Check loaded skills using npx skills list -g --json."""
         try:
@@ -402,11 +365,11 @@ class AICommandMixin:
     def _ensure_skills(self, agent: AgentCLI, required_skills: list[str]) -> None:
         """Warn about any of ``required_skills`` not yet installed globally for ``agent``.
 
-        Also sets up the Antigravity skills symlink (see ``_ensure_antigravity_skills_symlink``)
-        so a suggested install actually gets discovered by the agent.
+        Also gives the agent's handler a chance to reconcile where `skills` installs
+        with where the agent actually looks (see ``BaseAgentHandler.ensure_skills_discoverable``)
+        so a suggested install actually gets discovered.
         """
-        if agent.cli == "agy":
-            self._ensure_antigravity_skills_symlink()
+        agent.handler.ensure_skills_discoverable()
 
         loaded_skills = self._get_loaded_skills()
         missing_skills = [s for s in required_skills if s not in loaded_skills]
