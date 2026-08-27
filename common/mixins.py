@@ -335,6 +335,52 @@ class AICommandMixin:
 
         return [str(target_dir)]
 
+    #: Maps odev's `--cli` values to the agent names the `skills` npm package expects
+    #: for its `-a/--agent` flag.
+    _SKILLS_PACKAGE_AGENT_NAMES = {
+        "claude": "claude-code",
+        "agy": "antigravity",
+        "copilot": "github-copilot",
+        "opencode-cli": "opencode",
+    }
+
+    def _ensure_antigravity_skills_symlink(self) -> None:
+        """Make `~/.gemini/config/skills` resolve to the canonical Antigravity skills dir.
+
+        The `skills` CLI installs Antigravity skills under `~/.gemini/antigravity/skills`,
+        but Antigravity itself discovers global skills under `~/.gemini/config/skills`.
+        Symlinking the latter to the former lets a single `skills add -g -a antigravity`
+        satisfy both. If `~/.gemini/config/skills` already exists as a real directory
+        (e.g. skills copied there manually), its contents are migrated into the
+        canonical directory first.
+        """
+        home = Path.home()
+        target = home / ".gemini" / "antigravity" / "skills"
+        link = home / ".gemini" / "config" / "skills"
+
+        try:
+            if link.is_symlink():
+                if link.resolve() != target.resolve():
+                    logger.warning(f"{link} is a symlink to an unexpected location, leaving it as-is.")
+                return
+
+            if link.exists():
+                target.mkdir(parents=True, exist_ok=True)
+                for item in link.iterdir():
+                    dest = target / item.name
+                    if dest.exists():
+                        logger.warning(f"Skipping migration of {item}, {dest} already exists.")
+                        continue
+                    shutil.move(str(item), str(dest))
+                link.rmdir()
+
+            link.parent.mkdir(parents=True, exist_ok=True)
+            target.mkdir(parents=True, exist_ok=True)
+            link.symlink_to(target, target_is_directory=True)
+            logger.info(f"Linked {link} -> {target} so Antigravity can discover installed skills.")
+        except OSError as e:
+            logger.warning(f"Could not set up the Antigravity skills symlink: {e}")
+
     def _get_loaded_skills(self) -> list[str]:
         """Check loaded skills using npx skills list -g --json."""
         try:
@@ -352,6 +398,27 @@ class AICommandMixin:
         except Exception:
             pass
         return []
+
+    def _ensure_skills(self, agent: AgentCLI, required_skills: list[str]) -> None:
+        """Warn about any of ``required_skills`` not yet installed globally for ``agent``.
+
+        Also sets up the Antigravity skills symlink (see ``_ensure_antigravity_skills_symlink``)
+        so a suggested install actually gets discovered by the agent.
+        """
+        if agent.cli == "agy":
+            self._ensure_antigravity_skills_symlink()
+
+        loaded_skills = self._get_loaded_skills()
+        missing_skills = [s for s in required_skills if s not in loaded_skills]
+        if not missing_skills:
+            return
+
+        skills_agent = self._SKILLS_PACKAGE_AGENT_NAMES.get(agent.cli, agent.cli)
+        logger.warning(
+            f"The following skill(s) are missing: {', '.join(missing_skills)}. "
+            "For a better experience, you can load them by running:\n"
+            f"npx -y skills add odoo-ps/ps-ai-skills --skills {','.join(missing_skills)} -g -a {skills_agent}"
+        )
 
     def run_ai_agent(
         self,
@@ -376,21 +443,10 @@ class AICommandMixin:
 
         agent = self.get_ai_agent()
 
-        # Check for missing skills via npx skills list -g
-        loaded_skills = self._get_loaded_skills()
-        missing_skills = []
-        if "odev" not in loaded_skills:
-            missing_skills.append("odev")
-        if self._name == "test" and "test_skill" not in loaded_skills:
-            missing_skills.append("test_skill")
-
-        if missing_skills:
-            skills_str = " ".join(missing_skills)
-            logger.warning(
-                f"The following skill(s) are missing: {', '.join(missing_skills)}. "
-                "For a better experience, you can load them by running:\n"
-                f"npx -y skills add odoo-ps/ps-ai-skills --skills {skills_str}"
-            )
+        required_skills = ["odev"]
+        if self._name == "test":
+            required_skills.append("test_skill")
+        self._ensure_skills(agent, required_skills)
 
         return agent.run(
             prompt,
