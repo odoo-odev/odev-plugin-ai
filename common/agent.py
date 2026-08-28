@@ -150,6 +150,8 @@ class AgentCLI(OdevFrameworkMixin):
         prompt: str,
         sandbox_dirs: list[str],
         extra_bind_dirs: list[str] | None = None,
+        extra_ro_bind_dirs: list[str] | None = None,
+        mcp_servers: dict | None = None,
         database: str | None = None,
         db_user: str | None = None,
         version: str | None = None,
@@ -184,11 +186,24 @@ class AgentCLI(OdevFrameworkMixin):
         sandbox_data = self.sandbox.prepare_sandbox_config(
             sandbox_dirs=sandbox_dirs,
             extra_bind_dirs=extra_bind_dirs,
+            extra_ro_bind_dirs=extra_ro_bind_dirs,
             database=database,
             version=version,
         )
         final_binds = sandbox_data["binds"]
         active_venv_path = sandbox_data["active_venv_path"]
+
+        mcp_config_path = None
+        if mcp_servers:
+            # A plain RO bind, same shape as every other directory in final_binds: no
+            # backend-specific remapping to reason about, unlike playground (overlaid
+            # onto $HOME on Linux only) or sandbox_tmp (remapped to /tmp on Linux only).
+            mcp_dir = playground / "mcp"
+            mcp_dir.mkdir(parents=True, exist_ok=True)
+            mcp_config_file = mcp_dir / "mcp-config.json"
+            mcp_config_file.write_text(json.dumps({"mcpServers": mcp_servers}))
+            final_binds.append((mcp_dir.resolve(), mcp_dir.resolve(), True, False))
+            mcp_config_path = str(mcp_config_file.resolve())
 
         if not cwd:
             # Prioritize the first directory in sandbox_dirs (the main project path)
@@ -208,6 +223,8 @@ class AgentCLI(OdevFrameworkMixin):
 
         if not agent_cmd:
             return False
+
+        agent_cmd.extend(self.handler.get_mcp_config_args(mcp_config_path))
 
         if database:
             db_info = (
