@@ -101,3 +101,8 @@ class ClaudeHandler(BaseAgentHandler):
         for path in self._guest_paths(all_candidate_paths):
             cmd.extend(["--add-dir", path])
         return cmd
+
+    def get_mcp_config_args(self, mcp_config_path: str | None) -> list[str]:
+        if not mcp_config_path:
+            return []
+        return ["--mcp-config", mcp_config_path]

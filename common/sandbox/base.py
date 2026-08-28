@@ -299,6 +299,7 @@ class Sandbox(OdevFrameworkMixin, ABC):
         extra_bind_dirs: list[str] | None,
         database: str | None,
         version: str | None,
+        extra_ro_bind_dirs: list[str] | None = None,
     ) -> dict:
         """Build the flat list of sandbox bindings across the 3 binding categories.
 
@@ -321,6 +322,9 @@ class Sandbox(OdevFrameworkMixin, ABC):
                     *[bind(host, guest, ro=False, primary=True) for host, guest in effective_sandbox_binds],
                     # Type B — extra dirs provided by the caller (RW, now Primary)
                     *[bind(e, ro=False, primary=True) for e in (extra_bind_dirs or [])],
+                    # Type B — extra dirs provided by the caller (RO, still Primary so the
+                    # agent gets them via --add-dir/trustedDirectories, just can't edit them)
+                    *[bind(e, ro=True, primary=True) for e in (extra_ro_bind_dirs or [])],
                     # Type A — odev infrastructure (parents are mounted before children, no dedup)
                     bind(self.odev.path),
                     bind(self.odev.plugins_path),

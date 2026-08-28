@@ -337,6 +337,8 @@ class AICommandMixin:
         prompt: str,
         database: str | None = None,
         ephemeral_pg: bool = True,
+        extra_ro_bind_dirs: list[str] | None = None,
+        mcp_servers: dict | None = None,
     ) -> bool:
         """Helper to run the AI agent with common Odoo-related sandbox paths."""
         sandbox_dirs = self._get_sandbox_dirs(database)
@@ -368,6 +370,8 @@ class AICommandMixin:
             prompt,
             sandbox_dirs=sandbox_dirs,
             extra_bind_dirs=[str(d) for d in self.args.dirs] or None,
+            extra_ro_bind_dirs=extra_ro_bind_dirs,
+            mcp_servers=mcp_servers,
             database=database,
             resume=self.args.resume,
             ephemeral_pg=ephemeral_pg,

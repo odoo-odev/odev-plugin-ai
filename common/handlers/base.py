@@ -55,5 +55,15 @@ class BaseAgentHandler:
         """Build the command line for the agent."""
         raise NotImplementedError
 
+    def get_mcp_config_args(self, mcp_config_path: str | None) -> list[str]:
+        """Return extra CLI args wiring up an MCP config file.
+
+        Default: this agent CLI has no known MCP flag, so requested servers are
+        dropped with a warning instead of silently changing what the agent can do.
+        """
+        if mcp_config_path:
+            logger.warning(f"The {self.cli!r} CLI does not support MCP servers; ignoring the ones configured for it.")
+        return []
+
     def _guest_paths(self, all_candidate_paths: list[str]) -> list[str]:
         return all_candidate_paths
