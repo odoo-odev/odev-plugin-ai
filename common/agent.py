@@ -48,12 +48,40 @@ class AgentCLI(OdevFrameworkMixin):
             headless=headless,
         )
 
+    def _write_mcp_config(
+        self,
+        mcp_servers: dict[str, dict],
+        playground: Path,
+        host_home: Path,
+    ) -> str | None:
+        """Write the MCP server config and return the path the agent will see.
+
+        The playground is bound over the home directory inside the sandbox, so the file
+        is written here but read there — the returned path only resolves in the guest.
+        """
+        if not self.handler.supports_mcp:
+            logger.warning(f"{self.cli} does not support MCP servers, {len(mcp_servers)} server(s) ignored.")
+            return None
+
+        config_name = ".odev-mcp-config.json"
+
+        try:
+            (playground / config_name).write_text(json.dumps({"mcpServers": mcp_servers}, indent=2))
+        except OSError as e:
+            logger.warning(f"Could not write the MCP configuration, the agent will run without it: {e}")
+            return None
+
+        logger.debug(f"Declared MCP server(s) to {self.cli}: {', '.join(mcp_servers)}")
+        return str(host_home / config_name)
+
     def _get_agent_setup(
         self,
         prompt: str | None,
         resume: str | None,
         all_candidate_paths: list[str],
         host_home: Path,
+        mcp_config: str | None = None,
+        mcp_server_names: tuple[str, ...] = (),
     ) -> tuple[list[str], list[Path], list[Path]]:
         """Determine agent-specific command, directories, and files to mount."""
         agent_dirs = [
@@ -90,6 +118,8 @@ class AgentCLI(OdevFrameworkMixin):
             model=self.model,
             headless=self.headless,
             yolo=self.yolo,
+            mcp_config=mcp_config,
+            mcp_server_names=mcp_server_names,
         )
 
         # Deduplicate directories and files while preserving order
@@ -150,14 +180,25 @@ class AgentCLI(OdevFrameworkMixin):
         prompt: str,
         sandbox_dirs: list[str],
         extra_bind_dirs: list[str] | None = None,
+        extra_ro_bind_dirs: list[str] | None = None,
         database: str | None = None,
         db_user: str | None = None,
         version: str | None = None,
         resume: str | None = None,
         ephemeral_pg: bool = True,
         cwd: str | None = None,
+        mcp_servers: dict[str, dict] | None = None,
     ) -> bool:
-        """Run the AI agent within the platform-appropriate sandbox."""
+        """Run the AI agent within the platform-appropriate sandbox.
+
+        ``mcp_servers`` maps a server name to its stdio launch definition, exposing its
+        tools to the agent. Each definition carries its own environment: a stdio MCP
+        server inherits only an allowlist from the agent, so the sandbox secrets do not
+        reach it.
+
+        ``extra_ro_bind_dirs`` are mounted readable but not writable, for source the
+        agent is meant to consult rather than edit.
+        """
         # Reap any leftover ephemeral postgres clusters / sandbox tmp dirs
         # from previous Ctrl+C'd or crashed runs before we start fresh ones.
         PostgresSandbox.cleanup_orphans()
@@ -184,6 +225,7 @@ class AgentCLI(OdevFrameworkMixin):
         sandbox_data = self.sandbox.prepare_sandbox_config(
             sandbox_dirs=sandbox_dirs,
             extra_bind_dirs=extra_bind_dirs,
+            extra_ro_bind_dirs=extra_ro_bind_dirs,
             database=database,
             version=version,
         )
@@ -204,7 +246,15 @@ class AgentCLI(OdevFrameworkMixin):
         # Candidate paths for trustedDirectories and --add-dir inclusion
         all_candidate_paths = [str(dst) for src, dst, _, primary in final_binds if src != host_home and primary]
 
-        agent_cmd, agent_dirs, agent_files = self._get_agent_setup(prompt, resume, all_candidate_paths, host_home)
+        mcp_config = self._write_mcp_config(mcp_servers, playground, host_home) if mcp_servers else None
+        agent_cmd, agent_dirs, agent_files = self._get_agent_setup(
+            prompt,
+            resume,
+            all_candidate_paths,
+            host_home,
+            mcp_config=mcp_config,
+            mcp_server_names=tuple(mcp_servers) if mcp_config else (),
+        )
 
         if not agent_cmd:
             return False
