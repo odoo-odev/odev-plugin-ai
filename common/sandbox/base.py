@@ -264,7 +264,7 @@ class Sandbox(OdevFrameworkMixin, ABC):
                 "claude": "Claude",
                 "agy": "Agy",
                 "copilot": "Copilot",
-                "opencode-cli": "OpenCode",
+                "opencode": "OpenCode",
             }
             name = agent_names.get(self.cli, self.cli)
 

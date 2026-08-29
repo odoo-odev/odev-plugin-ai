@@ -64,3 +64,29 @@ rtk init --global
 ```
 
 This will configure a `PreToolUse` hook that automatically wraps your commands with `rtk`.
+
+## Installing agents CLI on your machine
+
+### CLI setup for Claude Code
+
+To install with `NPM`:
+
+```bash
+npm install -g @anthropic-ai/claude-code
+```
+
+### CLI setup for GitHub Copilot
+
+To install with `NPM`:
+
+```bash
+npm install -g @github/copilot
+```
+
+### CLI setup for OpenCode
+
+To install with `NPM`:
+
+```bash
+npm install -g opencode-ai
+```
