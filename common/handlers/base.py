@@ -7,6 +7,13 @@ logger = logging.getLogger(__name__)
 
 
 class BaseAgentHandler:
+    resolves_latest_natively: bool = False
+    """Whether the CLI resolves "the latest session" on its own.
+
+    An agent that does gets the ask passed straight through to it, and is the better
+    answer: it reads its own store, and knows which of its sessions is resumable.
+    """
+
     supports_mcp = False
     """Whether this agent CLI can be handed MCP servers through :meth:`get_command`."""
 
@@ -61,6 +68,20 @@ class BaseAgentHandler:
         Called before suggesting a `skills add` command; override when this agent's global
         skills directory differs from what the `skills` npm package targets for it.
         """
+
+    def get_latest_session_id(self, cwd=None):
+        """Return the id of the most recent session of this agent, or None.
+
+        Each CLI keeps its conversations in a store of its own shape, so the answer
+        belongs to the handler rather than to :class:`AgentCLI`: a lookup written for
+        one agent and applied to all of them is a lookup that finds nothing for the
+        others, and reports it as "no previous session" rather than as "I do not know
+        where this agent keeps them".
+
+        :param cwd: The directory the resumed run works in. Sessions are per-directory
+            for most agents, and the one to resume is the last one of *this* place.
+        """
+        return
 
     def get_command(
         self, prompt, resume, all_candidate_paths, model, headless, yolo, mcp_config=None, mcp_server_names=()

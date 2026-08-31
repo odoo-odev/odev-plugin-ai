@@ -13,6 +13,11 @@ class TestCommand(BaseTestCommand, AICommandMixin):
 
     _name = "test"
 
+    # Declared here rather than worked out from the command's name in the shared mixin:
+    # the prompt below sends the agent to `test_skill`, and the command that names the
+    # skill in its prompt is the one that should be asking for it to be installed.
+    required_skills = [*AICommandMixin.required_skills, "test_skill"]
+
     ai = args.Flag(
         aliases=["--ai"],
         description="Use AI to run tests and fix failures.",

@@ -7,6 +7,14 @@ logger = logging.getLogger(__name__)
 
 
 class OpenCodeHandler(ClaudeHandler):
+    def get_latest_session_id(self, cwd=None):
+        """Return nothing: opencode keeps its sessions somewhere else.
+
+        The Claude config layout is inherited here, its session store is not - and
+        answering with a Claude session id would resume the wrong agent's conversation.
+        """
+        return
+
     def get_command(
         self, prompt, resume, all_candidate_paths, model, headless, yolo, mcp_config=None, mcp_server_names=()
     ):

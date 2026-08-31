@@ -1,4 +1,6 @@
 import json
+import re
+from pathlib import Path
 
 from odev.common.logging import logging
 
@@ -6,6 +8,31 @@ from .base import BaseAgentHandler
 
 
 logger = logging.getLogger(__name__)
+
+PROJECTS_DIR = Path(".claude") / "projects"
+"""Where Claude Code keeps its conversations, one directory per working directory.
+
+Each directory is named after the path it belongs to with the separators replaced, and
+holds one ``<session-id>.jsonl`` transcript per conversation held there. There is no
+index file: the store *is* the listing, and the file name is the session id.
+"""
+
+SESSION_CWD_LOOKAHEAD = 50
+"""How many entries of a transcript are read looking for the directory it was held in.
+
+The first entries of a transcript are session metadata that carries no path; the
+directory shows up with the first message. A ceiling rather than a whole-file scan: a
+transcript runs to megabytes, and this only decorates a log line.
+"""
+
+NON_SLUG_CHARACTERS = re.compile(r"[^a-zA-Z0-9]+")
+"""What a path has replaced by a dash to become the name of its project directory.
+
+Applied to both sides of a comparison rather than used to rebuild the name: which
+characters Claude Code folds has changed between its versions - a directory written by
+an older one keeps underscores where a newer one dashes them - so a name built here is
+compared against names that were built by something else.
+"""
 
 
 class ClaudeHandler(BaseAgentHandler):
@@ -78,6 +105,82 @@ class ClaudeHandler(BaseAgentHandler):
             if not junk_file.exists():
                 junk_file.write_text(json.dumps(structure))
 
+    def get_latest_session_id(self, cwd=None):
+        """Return the id of the last Claude Code conversation, of ``cwd`` for choice.
+
+        Read off the transcripts themselves. What used to be read was
+        ``~/.claude/sessions.json``, which Claude Code does not write and
+        :meth:`cleanup_junk` here does - as an empty ``{"sessions": []}``, so the lookup
+        was reading odev's own placeholder and every ``--resume latest`` ended on "No
+        previous session found to resume."
+
+        The sandbox binds a working directory at the same path inside as outside, so the
+        project directory of a sandboxed run is the project directory of that path: a
+        session held in the sandbox is findable from the host, and the other way round.
+        """
+        projects_dir = self.host_home / PROJECTS_DIR
+
+        if not projects_dir.is_dir():
+            return None
+
+        try:
+            # Empty transcripts are sessions that were started and never spoken to;
+            # resuming one gives the agent nothing and loses the session that had it.
+            transcripts = sorted(
+                (path for path in projects_dir.glob("*/*.jsonl") if path.stat().st_size),
+                key=lambda path: path.stat().st_mtime,
+                reverse=True,
+            )
+        except OSError as e:
+            logger.debug(f"Could not list the Claude Code sessions in {projects_dir}: {e}")
+            return None
+
+        if not transcripts:
+            return None
+
+        if cwd:
+            slug = self._project_slug(cwd)
+            here = [path for path in transcripts if self._project_slug(path.parent.name) == slug]
+
+            if here:
+                return here[0].stem
+
+            logger.warning(
+                f"No previous Claude Code session was held in {cwd}; "
+                "resuming the most recent one from anywhere instead."
+            )
+
+        latest = transcripts[0]
+        logger.info(f"Resuming the last session of {self._session_cwd(latest) or latest.parent.name}.")
+        return latest.stem
+
+    @staticmethod
+    def _project_slug(path) -> str:
+        """Return a path, or the name of a project directory, in comparable form."""
+        return NON_SLUG_CHARACTERS.sub("-", str(path)).strip("-")
+
+    @staticmethod
+    def _session_cwd(transcript: Path) -> str | None:
+        """Return the directory a session was held in, as the transcript records it.
+
+        Read out of the transcript rather than off the name of the directory holding it:
+        that name has the separators of the path replaced by dashes, and a dash in it
+        was either a dash or a separator - ``odoo-odev`` and ``odoo/odev`` are written
+        the same way. Only used to say where a resumed session comes from, so failing to
+        find it costs the log line its detail and nothing else.
+        """
+        try:
+            with transcript.open() as lines:
+                for line, _ in zip(lines, range(SESSION_CWD_LOOKAHEAD), strict=False):
+                    entry = json.loads(line)
+
+                    if cwd := entry.get("cwd"):
+                        return str(cwd)
+        except (OSError, ValueError) as e:
+            logger.debug(f"Could not read the working directory of {transcript}: {e}")
+
+        return None
+
     def get_command(
         self, prompt, resume, all_candidate_paths, model, headless, yolo, mcp_config=None, mcp_server_names=()
     ):
@@ -88,7 +191,9 @@ class ClaudeHandler(BaseAgentHandler):
             else:
                 cmd.append(prompt)
         if resume:
-            cmd.extend(["--session-id", resume])
+            # --resume, not --session-id: the latter *names a new* session, and handed
+            # the id of one that already exists it refuses to start at all.
+            cmd.extend(["--resume", resume])
 
         allowed_tools = ["Bash(rtk:*)", "Bash(odev:*)", "Bash(git:*)", "Bash(pre-commit:*)", "Read", "Edit"]
 

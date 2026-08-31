@@ -10,6 +10,10 @@ logger = logging.getLogger(__name__)
 
 
 class AgyHandler(BaseAgentHandler):
+    # `agy --continue` reads Antigravity's own conversation store, which is the only
+    # thing that knows which of its conversations is resumable.
+    resolves_latest_natively = True
+
     def get_config_dirs(self):
         return [".antigravity", ".config/antigravity", ".gemini", ".config/gemini"]
 
