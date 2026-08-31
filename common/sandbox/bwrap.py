@@ -124,16 +124,21 @@ class BwrapSandbox(Sandbox):
 
         # Use the Chrome utility to generate a wrapper in the guest /tmp
         try:
-            # Temporarily redirect Chrome.odev.home_path to our sandbox_tmp to generate the wrapper
-            # Chrome.get_wrapper() will create {home_path}/tmp/odoo-chrome-wrapper
-            original_home = self.odev.home_path
-            self.odev.home_path = sandbox_tmp
-            chrome.get_wrapper(chrome_bin=chrome_guest_bin)
-            self.odev.home_path = original_home
+            # Written where get_wrapper puts it - under odev's home - and copied into
+            # the sandbox afterwards. It used to be produced in place by pointing
+            # odev.home_path at sandbox_tmp for the call, but home_path is a read-only
+            # property: that assignment raised on every run, so the wrapper was never
+            # written and ODOO_BROWSER_BIN never set.
+            wrapper = chrome.get_wrapper(chrome_bin=chrome_guest_bin)
 
-            # Point ODOO_BROWSER_BIN at the wrapper inside the guest's /tmp
-            # Since sandbox_tmp is bound to /tmp, the file is at /tmp/tmp/odoo-chrome-wrapper
-            cmd.extend(["--setenv", "ODOO_BROWSER_BIN", "/tmp/tmp/odoo-chrome-wrapper"])
+            # sandbox_tmp is bound to /tmp, and the guest path keeps the extra "tmp"
+            # level get_wrapper writes under, so the wrapper is /tmp/tmp/<name>.
+            guest_wrapper = sandbox_tmp / "tmp" / wrapper.name
+            guest_wrapper.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(wrapper, guest_wrapper)
+            guest_wrapper.chmod(0o755)
+
+            cmd.extend(["--setenv", "ODOO_BROWSER_BIN", f"/tmp/tmp/{wrapper.name}"])
         except Exception as e:
             logger.warning(f"Failed to setup Chrome wrapper: {e}")
         self._add_runtime_binds(cmd)
