@@ -9,9 +9,12 @@ if TYPE_CHECKING:
     from odev.common.console import Console
     from odev.common.odev import Odev
 
+import json
 import shutil
 import subprocess
+from datetime import datetime
 from pathlib import Path
+from typing import ClassVar
 
 from odev.common import args
 from odev.common.console import console
@@ -23,6 +26,25 @@ from odev.plugins.odev_plugin_ai.common.sandbox import get_sandbox_class
 
 
 logger = logging.getLogger(__name__)
+
+SKILLS_REPO = "odoo-ps/ps-ai-skills"
+
+GUIDELINES_SKILL = "odoo_coding_guidelines"
+"""Skill carrying how Odoo code is written: module layout, per-language conventions, and
+what a change is allowed to touch.
+
+Needed by every command here, not only the ones that write code: each of them puts an
+agent in front of a client's checkout, and the rule that a dev reformats nothing it was
+not asked to reformat - and runs pre-commit only where the repository configures it -
+holds whether the agent is scaffolding a module, fixing a test or reading the code.
+"""
+
+SKILLS_TIMEOUT = 120
+"""How long the skills CLI is given to answer, in seconds.
+
+Generous: installing clones the skills repository, which on a cold run is a network
+round trip. It is a ceiling on a hang, not a budget for a normal call.
+"""
 
 
 class AICommandMixin:
@@ -37,6 +59,23 @@ class AICommandMixin:
         config: "Config"
         console: "Console"
         _name: str
+
+    sandbox_repository: Path | None = None
+    """A checkout of the code the run is about, to work in ahead of anywhere else.
+
+    Set by the command that knows how to find one - which is not this plugin: what links
+    a task, a database and a repository together lives where tasks and hosted databases
+    do. Here it is a path, taken on trust and bound into the sandbox.
+    """
+
+    required_skills: ClassVar[list[str]] = ["odev", GUIDELINES_SKILL]
+    """Skills the agent needs to run this command, installed before it starts.
+
+    Declared by the command rather than decided from its name: a command knows what
+    method its prompt leans on, and a prompt that points at a skill the agent was never
+    given is a prompt missing the half that was moved out of it. A command whose skills
+    depend on the run appends to this before calling :meth:`run_ai_agent`.
+    """
 
     cli = args.String(
         aliases=["--cli"],
@@ -64,8 +103,23 @@ class AICommandMixin:
 
     resume = args.String(
         aliases=["--resume"],
-        description="Resume a previous AI session by ID or 'latest'.",
+        description="Resume a previous AI session, by id or 'latest'. Defaults to the latest session, "
+        "which is the last one held in the directory the run works in.",
         default=None,
+        # A bare --resume means the latest session: it is the only one a developer can
+        # name without going to look it up, and asking to resume without saying which
+        # session has no other reading.
+        nargs="?",
+        const="latest",
+    )
+
+    edit = args.Flag(
+        # -E rather than the -e this reads like: `scaffold` spends -e on --no-excalidraw,
+        # and a second command registering the same letter is a parser that refuses to
+        # build - the command stops existing rather than the flag being ignored.
+        aliases=["-E", "--edit"],
+        description="Open the prompt in $EDITOR before sending it; save it empty to abort the run.",
+        default=False,
     )
 
     dirs = args.List(
@@ -114,19 +168,11 @@ class AICommandMixin:
         )
         raise CommandError(f"AI CLI '{final_cli}' is not installed.")
 
-    def get_ai_agent(self) -> AgentCLI:
-        """Initialize and return an AgentCLI instance based on command arguments.
-
-        Handles favorite CLI selection and CLI-specific model favorites.
-        """
-        self._ensure_sandbox_supported()
-
+    def _resolve_cli(self) -> str:
+        """Return the AI CLI to run, asking for a favorite the first time around."""
         all_clis = ["claude", "agy", "copilot", "opencode-cli"]
         chosen_cli = self.args.cli
         favorite_cli = self.config.ai.favorite_cli
-
-        if self.args.headless:
-            self.console.bypass_prompt = True
 
         if not favorite_cli:
             available = [c for c in all_clis if shutil.which(c)]
@@ -148,17 +194,23 @@ class AICommandMixin:
                 self.config.ai.favorite_cli = favorite_cli
                 logger.info(f"Setting '{favorite_cli}' as your favorite AI CLI.")
 
-        if chosen_cli and favorite_cli and chosen_cli != favorite_cli and not self.args.headless:
-            if self.console.confirm(
+        if (
+            chosen_cli
+            and favorite_cli
+            and chosen_cli != favorite_cli
+            and not self.args.headless
+            and self.console.confirm(
                 f"Do you want to set '{chosen_cli}' as your new favorite AI CLI?",
                 default=False,
-            ):
-                self.config.ai.favorite_cli = chosen_cli
-                favorite_cli = chosen_cli
+            )
+        ):
+            self.config.ai.favorite_cli = chosen_cli
+            favorite_cli = chosen_cli
 
-        final_cli = chosen_cli or favorite_cli or "claude"
-        self._ensure_cli_installed(final_cli)
+        return chosen_cli or favorite_cli or "claude"
 
+    def _resolve_model(self, final_cli: str) -> str:
+        """Return the model to use for the given CLI, asking for a favorite the first time around."""
         chosen_model = self.args.model
         favorite_model = self.config.ai.get_favorite_model(final_cli)
 
@@ -178,21 +230,41 @@ class AICommandMixin:
             self.config.ai.set_favorite_model(final_cli, favorite_model)
             logger.info(f"Setting '{favorite_model}' as your favorite model for {final_cli}.")
 
-        if chosen_model and favorite_model and chosen_model != favorite_model and not self.args.headless:
-            if self.console.confirm(
+        if (
+            chosen_model
+            and favorite_model
+            and chosen_model != favorite_model
+            and not self.args.headless
+            and self.console.confirm(
                 f"Do you want to set '{chosen_model}' as your new favorite model for {final_cli}?",
                 default=False,
-            ):
-                self.config.ai.set_favorite_model(final_cli, chosen_model)
-                favorite_model = chosen_model
+            )
+        ):
+            self.config.ai.set_favorite_model(final_cli, chosen_model)
+            favorite_model = chosen_model
 
-        final_model = chosen_model or favorite_model or "auto"
+        return chosen_model or favorite_model or "auto"
+
+    def get_ai_agent(self) -> AgentCLI:
+        """Initialize and return an AgentCLI instance based on command arguments.
+
+        Handles favorite CLI selection and CLI-specific model favorites.
+        """
+        self._ensure_sandbox_supported()
+
+        if self.args.headless:
+            self.console.bypass_prompt = True
+
+        final_cli = self._resolve_cli()
+        self._ensure_cli_installed(final_cli)
+        final_model = self._resolve_model(final_cli)
 
         return AgentCLI(
             cli=final_cli,
             model=final_model,
             yolo=self.args.yolo,
             headless=self.args.headless,
+            edit=self.args.edit,
         )
 
     def _database_has_demo(self, database_obj) -> bool:
@@ -309,6 +381,10 @@ class AICommandMixin:
                 if addons_paths:
                     return [str(p.resolve()) for p in addons_paths]
 
+        if self.sandbox_repository is not None:
+            logger.info(f"Using the repository as working directory: {self.sandbox_repository}")
+            return [str(self.sandbox_repository)]
+
         target_dir = (cwd or Path.cwd()).resolve()
         home = Path.home().resolve()
 
@@ -324,8 +400,8 @@ class AICommandMixin:
                         is_git = True
                         break
                     curr = curr.parent
-            except Exception:
-                pass
+            except OSError as e:
+                logger.debug(f"Could not walk up from {target_dir} looking for a git repository: {e}")
 
             if not is_git:
                 playground = self.odev.home_path / "playground"
@@ -335,53 +411,151 @@ class AICommandMixin:
 
         return [str(target_dir)]
 
-    #: Maps odev's `--cli` values to the agent names the `skills` npm package expects
-    #: for its `-a/--agent` flag.
-    _SKILLS_PACKAGE_AGENT_NAMES = {
-        "claude": "claude-code",
-        "agy": "antigravity",
-        "copilot": "github-copilot",
-        "opencode-cli": "opencode",
-    }
+    @staticmethod
+    def _run_skills_cli(*arguments: str) -> subprocess.CompletedProcess | None:
+        """Run the skills CLI through npx, returning None if it could not be run.
 
-    def _get_loaded_skills(self) -> list[str]:
-        """Check loaded skills using npx skills list -g --json."""
+        Its output is captured, which means anything it asks is asked of a terminal that
+        cannot show the question: a clone wanting an SSH passphrase or a host key
+        confirmed would read from a stdin nobody is watching and never come back, with
+        the run stopped on "Loading missing skill(s)..." and no way to tell why. Closed
+        stdin turns that into a refusal, and the timeout into a warning - a skill that
+        cannot be fetched degrades the run, it does not end it.
+        """
+        npx = shutil.which("npx")
+        if not npx:
+            logger.debug("Could not find 'npx' in PATH; skipping the skills check.")
+            return None
         try:
-            import json
-
-            result = subprocess.run(
-                ["npx", "-y", "skills", "list", "-g", "--json"],
+            return subprocess.run(  # noqa: S603 - the arguments are built here, never user input
+                [npx, "-y", "skills", *arguments],
                 capture_output=True,
                 text=True,
                 check=False,
+                stdin=subprocess.DEVNULL,
+                timeout=SKILLS_TIMEOUT,
             )
-            if result.returncode == 0:
-                data = json.loads(result.stdout)
-                return [s["name"] for s in data if "name" in s]
-        except Exception:
-            pass
-        return []
+        except subprocess.TimeoutExpired:
+            logger.warning(
+                f"The skills CLI did not answer within {SKILLS_TIMEOUT}s "
+                f"(skills {' '.join(arguments)}); continuing without it."
+            )
+            return None
+        except OSError as e:
+            logger.debug(f"Could not run the skills CLI: {e}")
+            return None
 
-    def _ensure_skills(self, agent: AgentCLI, required_skills: list[str]) -> None:
-        """Warn about any of ``required_skills`` not yet installed globally for ``agent``.
+    def _get_loaded_skills(self) -> list[str]:
+        """Check loaded skills using npx skills list -g --json."""
+        result = self._run_skills_cli("list", "-g", "--json")
+        if result is None or result.returncode != 0:
+            return []
+        try:
+            data = json.loads(result.stdout)
+        except ValueError as e:
+            logger.debug(f"Could not parse the skills listing: {e}")
+            return []
+        return [s["name"] for s in data if "name" in s]
 
-        Also gives the agent's handler a chance to reconcile where `skills` installs
-        with where the agent actually looks (see ``BaseAgentHandler.ensure_skills_discoverable``)
-        so a suggested install actually gets discovered.
+    def _skills_package(self) -> str:
+        """Return the skills repository to install from, on odev's release channel.
+
+        odev tracks a branch - ``main`` or ``beta`` - and checks its plugins out on it;
+        the skills those plugins point at live in the same two branches of their own
+        repository, and a beta plugin asking a main skill for the method it works by is
+        the sort of mismatch that shows up as an agent doing something no code in the
+        checkout can explain. Anything else in ``update.release`` names a branch of odev
+        rather than of the skills repository, so the default branch is asked for instead.
+        """
+        release = self.config.update.release
+        return f"{SKILLS_REPO}#{release}" if release in ("main", "beta") else SKILLS_REPO
+
+    def _install_skills(self, skills: list[str]) -> list[str]:
+        """Install skills globally from the PS skills repo, return those still missing."""
+        package = self._skills_package()
+        logger.info(f"Loading missing skill(s) from {package}: {', '.join(skills)}...")
+        # --skill, singular: --skills is not an option the CLI knows, and an unknown
+        # option is ignored rather than refused, which quietly installed every skill of
+        # the repository on every call instead of the one that was missing.
+        result = self._run_skills_cli("add", package, "--skill", ",".join(skills), "-g")
+        if result is None:
+            return skills
+
+        # The installer exits 0 even when it fails for individual agent targets
+        # (e.g. agents that do not support global installs), so the only reliable
+        # check is to ask for the list again.
+        still_missing = [s for s in skills if s not in self._get_loaded_skills()]
+        if still_missing:
+            logger.debug(f"skills add output:\n{result.stdout or result.stderr}")
+        return still_missing
+
+    def _refresh_skills(self, skills: list[str]) -> None:
+        """Fetch the given skills again, overwriting the copies already installed.
+
+        Installing only what is missing leaves a store that never changes: a skill
+        installed once stayed at the revision it was installed at, so a rule added to it
+        reached the agents that had never loaded it and no one else. The store is the
+        agents' only copy - they read ~/.agents/skills, not the checkout - so it has to
+        be brought forward on its own.
+
+        Rate-limited by ``skills.interval`` rather than done on every run: a refresh
+        clones the skills repository, and paying a network round trip to start every
+        agent is how a check like this ends up being turned off. Failures are silent by
+        design - the skills already installed still work, and a run is not worth losing
+        over a fetch that did not answer.
+
+        Note that this overwrites a skill edited in place: the store is a checkout of the
+        repository, not somewhere to keep local changes. Edit the repository and let the
+        refresh bring them down.
+        """
+        if not self.config.skills.is_refresh_needed():
+            return
+
+        logger.debug(f"Refreshing the installed skill(s): {', '.join(skills)}...")
+
+        # `update`, not `add`: adding a skill that is already installed is a no-op, which
+        # is why the store never moved. Update compares the hash of the upstream skill
+        # folder against the one recorded at install time and refetches on a mismatch -
+        # so it costs nothing when nothing changed, and overwrites when something did.
+        if self._run_skills_cli("update", *skills, "-g", "-y") is None:
+            return
+
+        # Recorded on the attempt rather than on a verified result: what the CLI
+        # overwrote cannot be told apart from what it left alone, and a store that
+        # cannot be refreshed should still not be retried on every command.
+        self.config.skills.date = datetime.now()
+
+    def _ensure_skills(self, agent: AgentCLI, required: list[str]) -> None:
+        """Make sure the given skills are loaded, installing the missing ones.
+
+        Installs rather than suggests: a warning telling the developer to run a command
+        themselves is a warning scrolled past, and the agent then works without the
+        method its prompt sends it to - silently, since a missing skill looks exactly
+        like an agent that chose not to read one.
         """
         agent.handler.ensure_skills_discoverable()
 
-        loaded_skills = self._get_loaded_skills()
-        missing_skills = [s for s in required_skills if s not in loaded_skills]
-        if not missing_skills:
+        disabled = self.config.skills.disabled
+        wanted = [s for s in required if s not in disabled]
+        if not wanted:
             return
 
-        skills_agent = self._SKILLS_PACKAGE_AGENT_NAMES.get(agent.cli, agent.cli)
-        logger.warning(
-            f"The following skill(s) are missing: {', '.join(missing_skills)}. "
-            "For a better experience, you can load them by running:\n"
-            f"npx -y skills add odoo-ps/ps-ai-skills --skills {','.join(missing_skills)} -g -a {skills_agent}"
-        )
+        installed = self._get_loaded_skills()
+        missing = [s for s in wanted if s not in installed]
+        still_missing = self._install_skills(missing) if missing else []
+
+        # The ones that were already there, which installing would not have touched.
+        if already_installed := [s for s in wanted if s in installed]:
+            self._refresh_skills(already_installed)
+
+        if still_missing:
+            logger.warning(
+                f"The following skill(s) are missing: {', '.join(still_missing)}. "
+                "For a better experience, you can load them by running:\n"
+                f"npx -y skills add {self._skills_package()} --skill {','.join(still_missing)} -g"
+            )
+        elif missing:
+            logger.info(f"Loaded skill(s): {', '.join(missing)}")
 
     def run_ai_agent(
         self,
@@ -406,10 +580,7 @@ class AICommandMixin:
 
         agent = self.get_ai_agent()
 
-        required_skills = ["odev"]
-        if self._name == "test":
-            required_skills.append("test_skill")
-        self._ensure_skills(agent, required_skills)
+        self._ensure_skills(agent, self.required_skills)
 
         return agent.run(
             prompt,
