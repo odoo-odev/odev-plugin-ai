@@ -50,6 +50,13 @@ class ExecutionSpec:
     active_venv_path: Path | None = None
     odoo_filestore: Path | None = None
     primary_dirs: list[Path] | None = None
+    mcp_servers: dict | None = None
+    """MCP servers mounted for this run, as written to the agent's ``--mcp-config``.
+
+    Carried on the spec for the sole purpose of naming them in the security warning:
+    a bind mount of the config file says a server exists, not what it reaches. These
+    are the one part of the sandbox that talks to the network.
+    """
 
 
 class Sandbox(OdevFrameworkMixin, ABC):
@@ -136,7 +143,55 @@ class Sandbox(OdevFrameworkMixin, ABC):
 
         return sorted(result, key=lambda x: x[0])
 
+<<<<<<< Updated upstream
     def _display_sandbox_warning(
+=======
+    # Header names whose value is a credential and never belongs on screen. Matched as
+    # substrings, lowercased: a header called "X-Api-Key" must redact as surely as
+    # "Authorization" does, and the list of names a server may pick is open-ended.
+    _SECRET_HEADER_HINTS = ("authorization", "api-key", "apikey", "token", "secret", "password", "cookie")
+
+    @classmethod
+    def _redact_header(cls, name: str, value: str) -> str:
+        """Return a header rendered for display, with credentials masked.
+
+        A header binding the connection to one record - Ps-Tools' task id, say - is the
+        interesting half of the pair and is shown in full: it is what limits the reach
+        of the key beside it, so hiding it would hide the mitigation, not the risk.
+        """
+        if any(hint in name.lower() for hint in cls._SECRET_HEADER_HINTS):
+            return "<hidden>"
+
+        return value
+
+    def _display_mcp_servers(self, mcp_servers: dict | None) -> None:
+        """List the MCP servers the agent is given, and what each one reaches.
+
+        The bind mount of the config file already appears under INFRASTRUCTURE, which
+        tells the reader a server is mounted and nothing about where it connects. MCP
+        servers are the only part of this sandbox that leaves the machine, so they are
+        named here, next to the filesystem and database access they sit beside.
+        """
+        if not mcp_servers:
+            return
+
+        console.print(f"\n{string.stylize('MCP SERVERS (Network Access):', 'bold color.cyan')}")
+
+        for name, config in sorted(mcp_servers.items()):
+            if not isinstance(config, dict):
+                console.print(f" • {string.stylize(name, 'color.purple')}")
+                continue
+
+            # An http/sse server carries a url; a stdio one carries a command to spawn.
+            target = config.get("url") or " ".join([config.get("command", ""), *config.get("args", [])]).strip()
+            kind = config.get("type") or ("stdio" if config.get("command") else "http")
+            console.print(f" • {string.stylize(name, 'color.purple')} ({kind}) -> {target or 'unknown target'}")
+
+            for header, value in (config.get("headers") or {}).items():
+                console.print(f"     {header}: {self._redact_header(header, str(value))}")
+
+    def _display_sandbox_warning(  # noqa: PLR0912,PLR0913,PLR0915 - sequential bind-mount assembly, splitting it would obscure the security logic
+>>>>>>> Stashed changes
         self,
         binds: list[tuple[Path, Path, bool, bool]],
         agent_dirs: list[Path],
@@ -147,6 +202,7 @@ class Sandbox(OdevFrameworkMixin, ABC):
         active_venv_path: Path | None = None,
         odoo_filestore: Path | None = None,
         primary_dirs: list[Path] | None = None,
+        mcp_servers: dict | None = None,
     ) -> bool:
         """Display a warning message about the sandbox access and security risks."""
         if self.headless:
@@ -212,6 +268,8 @@ class Sandbox(OdevFrameworkMixin, ABC):
             console.print(
                 f"The agent will be able to see and potentially access {string.stylize('ALL', 'bold')} your local databases."
             )
+
+        self._display_mcp_servers(mcp_servers)
 
         # Build list of infrastructure/reference paths
         infra_items: list[tuple[Path, str]] = []
@@ -397,9 +455,16 @@ class Sandbox(OdevFrameworkMixin, ABC):
                     shutil.copy2(src, playground / gcn)
 
         trusted_paths = [str(host_home), "/knowledge", str(self.odev.home_path / "worktrees"), "/upgrade"]
+<<<<<<< Updated upstream
         for d in all_candidate_paths:
             if ":" in d:
                 trusted_paths.append(d.split(":")[1])
+=======
+        # The guest path of every workspace, which is what the agent is started in and
+        # what it checks its trust against. Written as a plain path, and as "src:dst"
+        # where a bind moves it: only the destination exists inside the sandbox.
+        trusted_paths.extend(path.split(":")[-1] for path in all_candidate_paths)
+>>>>>>> Stashed changes
 
         if rel_dir := self.handler.get_agent_config_rel_path():
             is_persistent = rel_dir in persistent_dirs

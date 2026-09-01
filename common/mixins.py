@@ -11,6 +11,7 @@ if TYPE_CHECKING:
 
 import shutil
 import subprocess
+from datetime import datetime
 from pathlib import Path
 
 from odev.common import args
@@ -24,6 +25,35 @@ from odev.plugins.odev_plugin_ai.common.sandbox import get_sandbox_class
 
 logger = logging.getLogger(__name__)
 
+<<<<<<< Updated upstream
+=======
+SKILLS_REPO = "odoo-ps/ps-ai-skills"
+
+GUIDELINES_SKILL = "odoo_coding_guidelines"
+"""Skill carrying how Odoo code is written: module layout, per-language conventions, and
+what a change is allowed to touch.
+
+Needed by every command here, not only the ones that write code: each of them puts an
+agent in front of a client's checkout, and the rule that a dev reformats nothing it was
+not asked to reformat - and runs pre-commit only where the repository configures it -
+holds whether the agent is scaffolding a module, fixing a test or reading the code to
+estimate it."""
+
+# Shared store the skills CLI installs into, whatever the agent.
+SKILLS_STORE = Path.home() / ".agents" / "skills"
+
+SKILLS_TIMEOUT = 120
+"""How long the skills CLI is given to answer, in seconds.
+
+Generous: installing clones the skills repo, which on a cold run is a network round trip.
+It is a ceiling on a hang, not a budget for a normal call."""
+
+
+def _newest_mtime(directory: Path) -> float:
+    """Return the most recent mtime found anywhere under the given directory."""
+    return max((p.stat().st_mtime for p in directory.rglob("*")), default=0.0)
+
+>>>>>>> Stashed changes
 
 class AICommandMixin:
     """Mixin for commands that use AI agents.
@@ -38,6 +68,46 @@ class AICommandMixin:
         console: "Console"
         _name: str
 
+<<<<<<< Updated upstream
+=======
+    sandbox_repository: Path | None = None
+    """A checkout of the code the run is about, to work in ahead of anywhere else.
+
+    Set by the command that knows how to find one - which is not this plugin: what
+    links a task, a database and a repository together lives where tasks and hosted
+    databases do. Here it is a path, taken on trust and bound into the sandbox.
+    """
+
+    sandbox_scope: str | None = None
+    """What this run is about, to give it a playground of its own.
+
+    An analysis is written from the artifacts of one task - its diagrams, the images of
+    its description - and the playground is where they land when the run has no
+    repository to work in. Shared between runs, the second analysis overwrites the
+    diagrams of the first and leaves behind whatever it has no file of its own to
+    overwrite: an ``embedded-image-4.png`` of a task that had four screenshots, sitting
+    in the working directory of one that has two, is a picture the agent can open and
+    has no way to tell is not its own.
+
+    Only the playground is scoped. A run working in a repository stays where the code
+    is - that is the point of resolving one - and a task-named directory there would
+    only leave untracked files in someone's checkout.
+
+    Set by the command that knows what its run is about, and read off it rather than
+    passed to :meth:`_get_sandbox_dirs`: the two callers of a run - the one placing its
+    artifacts and the one sandboxing the agent - have to agree on the answer.
+    """
+
+    required_skills: ClassVar[list[str]] = ["odev", GUIDELINES_SKILL]
+    """Skills the agent needs to run this command, installed before it starts.
+
+    Declared by the command rather than decided from its name: a command knows what
+    method its prompt leans on, and a prompt that points at a skill the agent was never
+    given is a prompt missing the half that was moved out of it. A command whose skills
+    depend on the run appends to this before calling :meth:`run_ai_agent`.
+    """
+
+>>>>>>> Stashed changes
     cli = args.String(
         aliases=["--cli"],
         description="The CLI AI agent to use (claude, agy, copilot, or opencode-cli).",
@@ -62,10 +132,25 @@ class AICommandMixin:
         default=False,
     )
 
+    edit = args.Flag(
+        # -E rather than the -e this reads like: `scaffold` spends -e on --no-excalidraw,
+        # and a second command registering the same letter is a parser that refuses to
+        # build - the command stops existing rather than the flag being ignored.
+        aliases=["-E", "--edit"],
+        description="Open the prompt in $EDITOR before sending it; save it empty to abort the run.",
+        default=False,
+    )
+
     resume = args.String(
         aliases=["--resume"],
-        description="Resume a previous AI session by ID or 'latest'.",
+        description="Resume a previous AI session, by id or 'latest'. Defaults to the latest session, "
+        "which is the last one held in the directory the run works in.",
         default=None,
+        # A bare --resume means the latest session: it is the only one a developer can
+        # name without going to look it up, and asking to resume without saying which
+        # session has no other reading.
+        nargs="?",
+        const="latest",
     )
 
     dirs = args.List(
@@ -193,6 +278,7 @@ class AICommandMixin:
             model=final_model,
             yolo=self.args.yolo,
             headless=self.args.headless,
+            edit=self.args.edit,
         )
 
     def _database_has_demo(self, database_obj) -> bool:
@@ -289,8 +375,13 @@ class AICommandMixin:
         Otherwise, if a database is provided, we try to use its repository path
         as the working directory.
         """
+<<<<<<< Updated upstream
         if version:
             from odev.common.version import OdooVersion
+=======
+        cache = self.__dict__.setdefault("_sandbox_dirs_cache", {})
+        key = (database_name, str(cwd) if cwd is not None else None, self.sandbox_repository, self.sandbox_scope)
+>>>>>>> Stashed changes
 
             normalized_version = str(OdooVersion(version))
             available = self._prepare_odoo_environment([normalized_version])
@@ -329,6 +420,10 @@ class AICommandMixin:
 
             if not is_git:
                 playground = self.odev.home_path / "playground"
+
+                if self.sandbox_scope:
+                    playground /= self.sandbox_scope
+
                 playground.mkdir(parents=True, exist_ok=True)
                 logger.info(f"Using AI playground sandbox: {playground}")
                 return [str(playground)]
@@ -371,6 +466,7 @@ class AICommandMixin:
         """
         agent.handler.ensure_skills_discoverable()
 
+<<<<<<< Updated upstream
         loaded_skills = self._get_loaded_skills()
         missing_skills = [s for s in required_skills if s not in loaded_skills]
         if not missing_skills:
@@ -382,6 +478,119 @@ class AICommandMixin:
             "For a better experience, you can load them by running:\n"
             f"npx -y skills add odoo-ps/ps-ai-skills --skills {','.join(missing_skills)} -g -a {skills_agent}"
         )
+=======
+    def _refresh_skills(self, skills: list[str]) -> None:
+        """Fetch the given skills again, overwriting the copies already installed.
+
+        Installing only what is missing leaves a store that never changes: a skill
+        installed once stayed at the revision it was installed at, so a rule added to it
+        reached the agents that had never loaded it and no one else. The store is the
+        agents' only copy - they read ~/.agents/skills, not the checkout - so it has to
+        be brought forward on its own.
+
+        Rate-limited by ``skills.interval`` rather than done on every run: a refresh
+        clones the skills repository, and paying a network round trip to start every
+        agent is how a check like this ends up being turned off. Failures are silent by
+        design - the skills already installed still work, and a run is not worth losing
+        over a fetch that did not answer.
+
+        Note that this overwrites a skill edited in place: the store is a checkout of the
+        repository, not somewhere to keep local changes. Edit the repository and let the
+        refresh bring them down.
+        """
+        if not self.config.skills.is_refresh_needed():
+            return
+
+        logger.debug(f"Refreshing the installed skill(s): {', '.join(skills)}...")
+
+        # `update`, not `add`: adding a skill that is already installed is a no-op, which
+        # is why the store never moved. Update compares the hash of the upstream skill
+        # folder against the one recorded at install time and refetches on a mismatch -
+        # so it costs nothing when nothing changed, and overwrites when something did.
+        if self._run_skills_cli("update", *skills, "-g", "-y") is None:
+            return
+
+        # Recorded on the attempt rather than on a verified result: what the CLI
+        # overwrote cannot be told apart from what it left alone, and a store that
+        # cannot be refreshed should still not be retried on every command.
+        self.config.skills.date = datetime.now()
+
+    def _install_skills(self, skills: list[str]) -> list[str]:
+        """Install skills globally from the PS skills repo, return those still missing."""
+        package = self._skills_package()
+        logger.info(f"Loading missing skill(s) from {package}: {', '.join(skills)}...")
+        # --skill, singular: --skills is not an option the CLI knows, and an unknown
+        # option is ignored rather than refused, which quietly installed every skill of
+        # the repository on every call instead of the one that was missing.
+        result = self._run_skills_cli("add", package, "--skill", ",".join(skills), "-g")
+        if result is None:
+            return skills
+
+        # The installer exits 0 even when it fails for individual agent targets
+        # (e.g. agents that do not support global installs), so the only reliable
+        # check is to ask for the list again.
+        still_missing = [s for s in skills if s not in self._get_loaded_skills()]
+        if still_missing:
+            logger.debug(f"skills add output:\n{result.stdout or result.stderr}")
+        return still_missing
+
+    def _mirror_skills(self, skills: list[str], skills_dir: Path) -> list[str]:
+        """Copy skills from the shared store into an agent-specific directory.
+
+        The skills CLI only maintains ~/.agents/skills and symlinks it into
+        ~/.claude/skills; agents reading from their own directory see nothing.
+        Files are copied rather than symlinked because that is what the CLI
+        itself does for those agents, and agy does not follow symlinks.
+        """
+        failed = []
+        for skill in skills:
+            source = SKILLS_STORE / skill
+            target = skills_dir / skill
+            if not source.is_dir():
+                failed.append(skill)
+                continue
+            try:
+                if target.is_dir() and _newest_mtime(target) >= _newest_mtime(source):
+                    continue
+                skills_dir.mkdir(parents=True, exist_ok=True)
+                # Overwrite in place rather than replacing the directory, so any
+                # file the user added next to the skill survives the refresh.
+                shutil.copytree(source, target, dirs_exist_ok=True)
+                logger.debug(f"Mirrored the {skill!r} skill into {skills_dir}.")
+            except (OSError, shutil.Error) as e:
+                logger.debug(f"Could not mirror the {skill!r} skill into {skills_dir}: {e}")
+                failed.append(skill)
+        return failed
+
+    def _ensure_skills(self, required: list[str], handler=None) -> None:
+        """Make sure the given skills are loaded, installing the missing ones."""
+        disabled = self.config.skills.disabled
+        wanted = [s for s in required if s not in disabled]
+        if not wanted:
+            return
+
+        installed = self._get_loaded_skills()
+        missing = [s for s in wanted if s not in installed]
+        still_missing = self._install_skills(missing) if missing else []
+
+        # The ones that were already there, which installing would not have touched.
+        if already_installed := [s for s in wanted if s in installed]:
+            self._refresh_skills(already_installed)
+
+        # Agents the skills CLI does not install to need the files copied over.
+        skills_dir = handler.get_global_skills_dir() if handler else None
+        if skills_dir:
+            still_missing += self._mirror_skills([s for s in wanted if s not in still_missing], skills_dir)
+
+        if still_missing:
+            logger.warning(
+                f"The following skill(s) are missing: {', '.join(still_missing)}. "
+                "For a better experience, you can load them by running:\n"
+                f"npx -y skills add {self._skills_package()} --skill {','.join(still_missing)} -g"
+            )
+        elif missing:
+            logger.info(f"Loaded skill(s): {', '.join(missing)}")
+>>>>>>> Stashed changes
 
     def run_ai_agent(
         self,

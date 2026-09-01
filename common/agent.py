@@ -8,6 +8,7 @@ from pathlib import Path
 from odev.common.logging import logging
 from odev.common.mixins.framework import OdevFrameworkMixin
 
+from .editor import PromptEditingAbortedError, edit_prompt
 from .handlers import get_agent_handler
 from .postgres import PostgresSandbox
 from .sandbox import ExecutionSpec, get_sandbox
@@ -29,6 +30,7 @@ class AgentCLI(OdevFrameworkMixin):
         model: str = "auto",
         yolo: bool = False,
         headless: bool = False,
+        edit: bool = False,
     ):
         super().__init__()
         host_home = Path.home().resolve()
@@ -39,6 +41,12 @@ class AgentCLI(OdevFrameworkMixin):
         self.model = model
         self.headless = headless
         self.yolo = yolo or headless
+        self.edit = edit and not headless
+
+        if edit and headless:
+            # Nothing to open an editor on, and nobody to close it: --headless exists to
+            # be run without a terminal in front of it.
+            logger.warning("Ignoring --edit: there is no terminal to edit the prompt in when running headless.")
         self.handler = get_agent_handler(cli, host_home, Odev())
         self.sandbox = get_sandbox(
             cli=cli,
@@ -175,7 +183,11 @@ class AgentCLI(OdevFrameworkMixin):
         # Deduplicate while preserving order
         return ":".join(dict.fromkeys(items))
 
+<<<<<<< Updated upstream
     def run(
+=======
+    def run(  # noqa: PLR0913 - carries the full sandbox invocation context
+>>>>>>> Stashed changes
         self,
         prompt: str,
         sandbox_dirs: list[str],
@@ -189,6 +201,7 @@ class AgentCLI(OdevFrameworkMixin):
         cwd: str | None = None,
         mcp_servers: dict[str, dict] | None = None,
     ) -> bool:
+<<<<<<< Updated upstream
         """Run the AI agent within the platform-appropriate sandbox.
 
         ``mcp_servers`` maps a server name to its stdio launch definition, exposing its
@@ -199,22 +212,22 @@ class AgentCLI(OdevFrameworkMixin):
         ``extra_ro_bind_dirs`` are mounted readable but not writable, for source the
         agent is meant to consult rather than edit.
         """
+=======
+        """Run the AI agent within the platform-appropriate sandbox."""
+        # Before the sandbox, the ephemeral cluster and the temporary directories of the
+        # run: a prompt the developer decides against is a run that never starts, and
+        # nothing it would have to clean up again has been made yet.
+        if self.edit and prompt:
+            try:
+                prompt = edit_prompt(prompt)
+            except PromptEditingAbortedError as e:
+                logger.info(f"{e} Nothing was run.")
+                return False
+
+>>>>>>> Stashed changes
         # Reap any leftover ephemeral postgres clusters / sandbox tmp dirs
         # from previous Ctrl+C'd or crashed runs before we start fresh ones.
         PostgresSandbox.cleanup_orphans()
-
-        if resume == "latest":
-            if self.cli == "agy":
-                # Agy CLI natively supports --resume latest inside the sandbox
-                pass
-            else:
-                latest_id = self.get_latest_session_id()
-                if latest_id:
-                    logger.info(f"Resuming latest session: {latest_id}")
-                    resume = latest_id
-                else:
-                    logger.warning("No previous session found to resume.")
-                    resume = None
 
         host_home = Path.home().resolve()
         playground = Path(tempfile.mkdtemp(prefix=f"odev-ai-{self.cli}-"))
@@ -246,6 +259,7 @@ class AgentCLI(OdevFrameworkMixin):
         # Candidate paths for trustedDirectories and --add-dir inclusion
         all_candidate_paths = [str(dst) for src, dst, _, primary in final_binds if src != host_home and primary]
 
+<<<<<<< Updated upstream
         mcp_config = self._write_mcp_config(mcp_servers, playground, host_home) if mcp_servers else None
         agent_cmd, agent_dirs, agent_files = self._get_agent_setup(
             prompt,
@@ -255,10 +269,24 @@ class AgentCLI(OdevFrameworkMixin):
             mcp_config=mcp_config,
             mcp_server_names=tuple(mcp_servers) if mcp_config else (),
         )
+=======
+        resume = self._resolve_resume(resume, cwd)
+
+        # Only ever prefixed to a prompt there already is: handed to an agent started
+        # with nothing to do, the note becomes the first thing it is asked, and a run
+        # meant to open a conversation opens with the agent answering its own sandbox
+        # description instead of waiting. It used to be assembled after the command that
+        # carries the prompt was built, so it reached no agent at all.
+        if prompt:
+            prompt = self._environment_note(database) + prompt
+
+        agent_cmd, agent_dirs, agent_files = self._get_agent_setup(prompt, resume, all_candidate_paths, host_home)
+>>>>>>> Stashed changes
 
         if not agent_cmd:
             return False
 
+<<<<<<< Updated upstream
         if database:
             db_info = (
                 f"(Environment: You have been granted access to a private, isolated PostgreSQL database named '{database}'. "
@@ -272,6 +300,9 @@ class AgentCLI(OdevFrameworkMixin):
                 "No database access has been provided for this session.)\n\n"
             )
         prompt = db_info + prompt
+=======
+        agent_cmd.extend(self.handler.get_mcp_config_args(mcp_config_path))
+>>>>>>> Stashed changes
 
         sandbox_path = self._build_sandbox_path(active_venv_path, host_home)
         env = self._build_env(host_home, sandbox_path, database)
@@ -304,21 +335,23 @@ class AgentCLI(OdevFrameworkMixin):
             active_venv_path=active_venv_path,
             odoo_filestore=host_home / ".local" / "share" / "Odoo",
             primary_dirs=[Path(d) for d in sandbox_dirs],
+            mcp_servers=mcp_servers,
         )
 
         return self.sandbox.execute(spec)
 
-    def get_latest_session_id(self) -> str | None:
-        """Return the ID of the most recent session for this agent CLI."""
-        try:
-            home = Path.home()
-            if self.cli == "agy":
-                sessions_file = home / ".antigravity" / "sessions.json"
-            elif self.cli in ("claude", "opencode-cli"):
-                sessions_file = home / ".claude" / "sessions.json"
-            else:
-                return None
+    @staticmethod
+    def _environment_note(database: str | None) -> str:
+        """Return what the agent has to know about the sandbox it was started in."""
+        if database:
+            return (
+                f"(Environment: You have been granted access to a private, isolated PostgreSQL database "
+                f"named '{database}'. If the host database '{database}' exists, it has been cloned into "
+                "this ephemeral cluster. Otherwise it is an empty database. You can safely modify it as "
+                "it does not affect the live host data. Use 'psql' to work directly with it.)\n\n"
+            )
 
+<<<<<<< Updated upstream
             if sessions_file and sessions_file.exists():
                 data = json.loads(sessions_file.read_text())
                 sessions = data.get("sessions", [])
@@ -327,6 +360,46 @@ class AgentCLI(OdevFrameworkMixin):
         except Exception as e:
             logger.debug(f"Could not read latest session id for {self.cli!r}: {e}")
         return None
+=======
+        return (
+            "(Environment: You have been granted access to a private, isolated filesystem sandbox. "
+            "No database access has been provided for this session.)\n\n"
+        )
+
+    def _resolve_resume(self, resume: str | None, cwd: str | None) -> str | None:
+        """Turn a request to resume "latest" into the id of an actual session.
+
+        Done here rather than in the argument, and once the working directory of the run
+        is known: sessions are per-directory, and the one meant by "latest" is the last
+        one held where this run works - which is what makes ``odev scaffold`` in a
+        folder and ``odev ai --resume`` in that same folder the same conversation.
+        """
+        if resume != "latest":
+            return resume
+
+        if self.handler.resolves_latest_natively:
+            return resume
+
+        latest_id = self.get_latest_session_id(cwd)
+
+        if not latest_id:
+            logger.warning(f"No previous {self.cli} session was found to resume; starting a new one.")
+            return None
+
+        return latest_id
+
+    def get_latest_session_id(self, cwd: str | None = None) -> str | None:
+        """Return the id of the most recent session of this agent CLI, if it keeps one.
+
+        Where that is depends on the agent, so the answer is the handler's: see
+        :meth:`BaseAgentHandler.get_latest_session_id`.
+        """
+        try:
+            return self.handler.get_latest_session_id(cwd)
+        except (OSError, ValueError, AttributeError) as e:
+            logger.debug(f"Could not read the latest session id for {self.cli!r}: {e}")
+            return None
+>>>>>>> Stashed changes
 
     def _setup_github_token(self) -> list[tuple[str, str]]:
         """Retrieve GITHUB_TOKEN for PR creation and other GitHub operations."""
