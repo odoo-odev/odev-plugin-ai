@@ -1,6 +1,6 @@
 """Common mixins for AI-related commands."""
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, ClassVar
 
 
 if TYPE_CHECKING:
@@ -9,13 +9,14 @@ if TYPE_CHECKING:
     from odev.common.console import Console
     from odev.common.odev import Odev
 
+import json
 import shutil
 import subprocess
-from datetime import datetime
 from pathlib import Path
 
 from odev.common import args
 from odev.common.console import console
+from odev.common.databases.local import LocalDatabase
 from odev.common.errors import CommandError
 from odev.common.logging import logging
 
@@ -25,19 +26,8 @@ from odev.plugins.odev_plugin_ai.common.sandbox import get_sandbox_class
 
 logger = logging.getLogger(__name__)
 
-<<<<<<< Updated upstream
-=======
 SKILLS_REPO = "odoo-ps/ps-ai-skills"
-
 GUIDELINES_SKILL = "odoo_coding_guidelines"
-"""Skill carrying how Odoo code is written: module layout, per-language conventions, and
-what a change is allowed to touch.
-
-Needed by every command here, not only the ones that write code: each of them puts an
-agent in front of a client's checkout, and the rule that a dev reformats nothing it was
-not asked to reformat - and runs pre-commit only where the repository configures it -
-holds whether the agent is scaffolding a module, fixing a test or reading the code to
-estimate it."""
 
 # Shared store the skills CLI installs into, whatever the agent.
 SKILLS_STORE = Path.home() / ".agents" / "skills"
@@ -53,7 +43,6 @@ def _newest_mtime(directory: Path) -> float:
     """Return the most recent mtime found anywhere under the given directory."""
     return max((p.stat().st_mtime for p in directory.rglob("*")), default=0.0)
 
->>>>>>> Stashed changes
 
 class AICommandMixin:
     """Mixin for commands that use AI agents.
@@ -68,8 +57,6 @@ class AICommandMixin:
         console: "Console"
         _name: str
 
-<<<<<<< Updated upstream
-=======
     sandbox_repository: Path | None = None
     """A checkout of the code the run is about, to work in ahead of anywhere else.
 
@@ -79,24 +66,7 @@ class AICommandMixin:
     """
 
     sandbox_scope: str | None = None
-    """What this run is about, to give it a playground of its own.
-
-    An analysis is written from the artifacts of one task - its diagrams, the images of
-    its description - and the playground is where they land when the run has no
-    repository to work in. Shared between runs, the second analysis overwrites the
-    diagrams of the first and leaves behind whatever it has no file of its own to
-    overwrite: an ``embedded-image-4.png`` of a task that had four screenshots, sitting
-    in the working directory of one that has two, is a picture the agent can open and
-    has no way to tell is not its own.
-
-    Only the playground is scoped. A run working in a repository stays where the code
-    is - that is the point of resolving one - and a task-named directory there would
-    only leave untracked files in someone's checkout.
-
-    Set by the command that knows what its run is about, and read off it rather than
-    passed to :meth:`_get_sandbox_dirs`: the two callers of a run - the one placing its
-    artifacts and the one sandboxing the agent - have to agree on the answer.
-    """
+    """Optional scope used by commands that isolate sandbox playground data."""
 
     required_skills: ClassVar[list[str]] = ["odev", GUIDELINES_SKILL]
     """Skills the agent needs to run this command, installed before it starts.
@@ -107,7 +77,6 @@ class AICommandMixin:
     depend on the run appends to this before calling :meth:`run_ai_agent`.
     """
 
->>>>>>> Stashed changes
     cli = args.String(
         aliases=["--cli"],
         description="The CLI AI agent to use (claude, agy, copilot, or opencode-cli).",
@@ -132,40 +101,16 @@ class AICommandMixin:
         default=False,
     )
 
-    edit = args.Flag(
-        # -E rather than the -e this reads like: `scaffold` spends -e on --no-excalidraw,
-        # and a second command registering the same letter is a parser that refuses to
-        # build - the command stops existing rather than the flag being ignored.
-        aliases=["-E", "--edit"],
-        description="Open the prompt in $EDITOR before sending it; save it empty to abort the run.",
-        default=False,
-    )
-
     resume = args.String(
         aliases=["--resume"],
-        description="Resume a previous AI session, by id or 'latest'. Defaults to the latest session, "
-        "which is the last one held in the directory the run works in.",
+        description="Resume a previous AI session by ID or 'latest'.",
         default=None,
-        # A bare --resume means the latest session: it is the only one a developer can
-        # name without going to look it up, and asking to resume without saying which
-        # session has no other reading.
-        nargs="?",
-        const="latest",
     )
 
     dirs = args.List(
         aliases=["-d", "--dirs"],
         description="Comma-separated list of extra directories to include in the sandbox (read-write).",
         default=[],
-    )
-
-    version = args.String(
-        aliases=["-V", "--version"],
-        description="""Launch the AI agent in the worktree directory of a specific Odoo version
-        (e.g. 17.0, saas-17.2, master) instead of a database's linked repository. The worktree is
-        created and updated automatically if needed. Takes precedence over a database's repository
-        path if both a database and a version are given.""",
-        default=None,
     )
 
     def _ensure_sandbox_supported(self) -> None:
@@ -199,19 +144,11 @@ class AICommandMixin:
         )
         raise CommandError(f"AI CLI '{final_cli}' is not installed.")
 
-    def get_ai_agent(self) -> AgentCLI:
-        """Initialize and return an AgentCLI instance based on command arguments.
-
-        Handles favorite CLI selection and CLI-specific model favorites.
-        """
-        self._ensure_sandbox_supported()
-
+    def _resolve_cli(self) -> str:
+        """Return the AI CLI to run, asking for a favorite the first time around."""
         all_clis = ["claude", "agy", "copilot", "opencode-cli"]
         chosen_cli = self.args.cli
         favorite_cli = self.config.ai.favorite_cli
-
-        if self.args.headless:
-            self.console.bypass_prompt = True
 
         if not favorite_cli:
             available = [c for c in all_clis if shutil.which(c)]
@@ -233,17 +170,23 @@ class AICommandMixin:
                 self.config.ai.favorite_cli = favorite_cli
                 logger.info(f"Setting '{favorite_cli}' as your favorite AI CLI.")
 
-        if chosen_cli and favorite_cli and chosen_cli != favorite_cli and not self.args.headless:
-            if self.console.confirm(
+        if (
+            chosen_cli
+            and favorite_cli
+            and chosen_cli != favorite_cli
+            and not self.args.headless
+            and self.console.confirm(
                 f"Do you want to set '{chosen_cli}' as your new favorite AI CLI?",
                 default=False,
-            ):
-                self.config.ai.favorite_cli = chosen_cli
-                favorite_cli = chosen_cli
+            )
+        ):
+            self.config.ai.favorite_cli = chosen_cli
+            favorite_cli = chosen_cli
 
-        final_cli = chosen_cli or favorite_cli or "claude"
-        self._ensure_cli_installed(final_cli)
+        return chosen_cli or favorite_cli or "claude"
 
+    def _resolve_model(self, final_cli: str) -> str:
+        """Return the model to use for the given CLI, asking for a favorite the first time around."""
         chosen_model = self.args.model
         favorite_model = self.config.ai.get_favorite_model(final_cli)
 
@@ -263,22 +206,40 @@ class AICommandMixin:
             self.config.ai.set_favorite_model(final_cli, favorite_model)
             logger.info(f"Setting '{favorite_model}' as your favorite model for {final_cli}.")
 
-        if chosen_model and favorite_model and chosen_model != favorite_model and not self.args.headless:
-            if self.console.confirm(
+        if (
+            chosen_model
+            and favorite_model
+            and chosen_model != favorite_model
+            and not self.args.headless
+            and self.console.confirm(
                 f"Do you want to set '{chosen_model}' as your new favorite model for {final_cli}?",
                 default=False,
-            ):
-                self.config.ai.set_favorite_model(final_cli, chosen_model)
-                favorite_model = chosen_model
+            )
+        ):
+            self.config.ai.set_favorite_model(final_cli, chosen_model)
+            favorite_model = chosen_model
 
-        final_model = chosen_model or favorite_model or "auto"
+        return chosen_model or favorite_model or "auto"
+
+    def get_ai_agent(self) -> AgentCLI:
+        """Initialize and return an AgentCLI instance based on command arguments.
+
+        Handles favorite CLI selection and CLI-specific model favorites.
+        """
+        self._ensure_sandbox_supported()
+
+        if self.args.headless:
+            self.console.bypass_prompt = True
+
+        final_cli = self._resolve_cli()
+        self._ensure_cli_installed(final_cli)
+        final_model = self._resolve_model(final_cli)
 
         return AgentCLI(
             cli=final_cli,
             model=final_model,
             yolo=self.args.yolo,
             headless=self.args.headless,
-            edit=self.args.edit,
         )
 
     def _database_has_demo(self, database_obj) -> bool:
@@ -292,7 +253,7 @@ class AICommandMixin:
             # Fallback for older versions or specific configurations
             result = database_obj.query("SELECT COUNT(*) FROM ir_module_module_demo")
             return bool(result and result[0][0] > 0)
-        except Exception:
+        except Exception:  # noqa: BLE001 - any query failure means we cannot tell, assume no demo data
             return False
 
     def _database_is_neutralized(self, database_obj) -> bool:
@@ -300,7 +261,7 @@ class AICommandMixin:
         try:
             result = database_obj.query("SELECT value FROM ir_config_parameter WHERE key = 'database.is_neutralized'")
             return bool(result and result[0][0] == "true")
-        except Exception:
+        except Exception:  # noqa: BLE001 - any query failure means we cannot tell, assume not neutralized
             return False
 
     def _ensure_database_safety(self, database_name: str | None) -> bool:
@@ -310,8 +271,6 @@ class AICommandMixin:
         """
         if not database_name:
             return False
-
-        from odev.common.databases import LocalDatabase
 
         db = LocalDatabase(database_name)
         if not db.exists:
@@ -360,38 +319,46 @@ class AICommandMixin:
                     self.odev.run_command("worktree", "-C", version, "-V", version)
                 if self.odev.config.repositories.is_pull_needed(version):
                     self.odev.run_command("pull", "-V", version)
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 - a broken version must not abort the other ones
                 logger.warning(f"Could not prepare Odoo {version} environment: {e}")
             available[version] = worktree_path.exists()
         return available
 
-    def _get_sandbox_dirs(
-        self, database_name: str | None = None, version: str | None = None, cwd: Path | None = None
-    ) -> list[str]:
-        """Return the list of directories to include in the sandbox.
+    def _get_sandbox_dirs(self, database_name: str | None = None, cwd: Path | None = None) -> list[str]:
+        """Return the directories of the sandbox, resolving them once per run.
 
-        The first directory in the list will be used as the working directory.
-        If a version is provided, we use the Odoo worktree for that version.
-        Otherwise, if a database is provided, we try to use its repository path
-        as the working directory.
+        Cached because a command asks for them more than once - where to write the
+        artifacts of a run, then where to sandbox the agent - and resolving the same
+        answer twice announces it twice: a run picking the playground said so on two
+        consecutive lines, which reads like it happened twice.
+
+        The repository to work in is read off the command rather than passed here: the
+        two callers of a run - the one placing its artifacts and the one sandboxing the
+        agent - have to agree, and an argument only one of them passes makes them
+        disagree silently, by missing the cache.
         """
-<<<<<<< Updated upstream
-        if version:
-            from odev.common.version import OdooVersion
-=======
         cache = self.__dict__.setdefault("_sandbox_dirs_cache", {})
-        key = (database_name, str(cwd) if cwd is not None else None, self.sandbox_repository, self.sandbox_scope)
->>>>>>> Stashed changes
+        key = (database_name, str(cwd) if cwd is not None else None, self.sandbox_repository)
 
-            normalized_version = str(OdooVersion(version))
-            available = self._prepare_odoo_environment([normalized_version])
-            if available.get(normalized_version):
-                return [str((self.odev.worktrees_path / normalized_version).resolve())]
-            logger.warning(f"Could not prepare a worktree for Odoo {normalized_version}, falling back.")
+        if key not in cache:
+            cache[key] = self._resolve_sandbox_dirs(database_name, cwd)
 
+        return cache[key]
+
+    def _resolve_sandbox_dirs(self, database_name: str | None = None, cwd: Path | None = None) -> list[str]:
+        """Work out the list of directories to include in the sandbox.
+
+        The first directory in the list is the working directory of the agent, in
+        decreasing order of how much it says about the task:
+
+        1. the addons paths of a local database, which are the checkouts it runs on;
+        2. :attr:`sandbox_repository`, the checkout of the code the run is about, which
+           a command resolved for itself - the only code a hosted database can offer,
+           running nowhere local;
+        3. the directory the command was called from, when it is inside a repository;
+        4. the playground, which exposes no personal folder to the agent.
+        """
         if database_name:
-            from odev.common.databases.local import LocalDatabase
-
             db = LocalDatabase(database_name)
             if db.exists and db.process:
                 # Try to get the repository path linked to the database
@@ -399,6 +366,10 @@ class AICommandMixin:
                 addons_paths = db.process.additional_addons_paths
                 if addons_paths:
                     return [str(p.resolve()) for p in addons_paths]
+
+        if self.sandbox_repository is not None:
+            logger.info(f"Using the repository as working directory: {self.sandbox_repository}")
+            return [str(self.sandbox_repository)]
 
         target_dir = (cwd or Path.cwd()).resolve()
         home = Path.home().resolve()
@@ -415,105 +386,75 @@ class AICommandMixin:
                         is_git = True
                         break
                     curr = curr.parent
-            except Exception:
-                pass
+            except OSError as e:
+                logger.debug(f"Could not walk up from {target_dir} looking for a git repository: {e}")
 
             if not is_git:
                 playground = self.odev.home_path / "playground"
-
-                if self.sandbox_scope:
-                    playground /= self.sandbox_scope
-
                 playground.mkdir(parents=True, exist_ok=True)
                 logger.info(f"Using AI playground sandbox: {playground}")
                 return [str(playground)]
 
         return [str(target_dir)]
 
-    #: Maps odev's `--cli` values to the agent names the `skills` npm package expects
-    #: for its `-a/--agent` flag.
-    _SKILLS_PACKAGE_AGENT_NAMES = {
-        "claude": "claude-code",
-        "agy": "antigravity",
-        "copilot": "github-copilot",
-        "opencode-cli": "opencode",
-    }
+    @staticmethod
+    def _run_skills_cli(*arguments: str) -> subprocess.CompletedProcess | None:
+        """Run the skills CLI through npx, returning None if it could not be run.
 
-    def _get_loaded_skills(self) -> list[str]:
-        """Check loaded skills using npx skills list -g --json."""
+        Its output is captured, which means anything it asks is asked of a terminal that
+        cannot show the question: a clone wanting an SSH passphrase or a host key
+        confirmed would read from a stdin nobody is watching and never come back, with
+        the run stopped on "Loading missing skill(s)..." and no way to tell why. Closed
+        stdin turns that into a refusal, and the timeout into a warning - a skill that
+        cannot be fetched degrades the run, it does not end it.
+        """
+        npx = shutil.which("npx")
+        if not npx:
+            logger.debug("Could not find 'npx' in PATH; skipping the skills check.")
+            return None
         try:
-            import json
-
-            result = subprocess.run(
-                ["npx", "-y", "skills", "list", "-g", "--json"],
+            return subprocess.run(  # noqa: S603 - the arguments are built here, never user input
+                [npx, "-y", "skills", *arguments],
                 capture_output=True,
                 text=True,
                 check=False,
+                stdin=subprocess.DEVNULL,
+                timeout=SKILLS_TIMEOUT,
             )
-            if result.returncode == 0:
-                data = json.loads(result.stdout)
-                return [s["name"] for s in data if "name" in s]
-        except Exception:
-            pass
-        return []
+        except subprocess.TimeoutExpired:
+            logger.warning(
+                f"The skills CLI did not answer within {SKILLS_TIMEOUT}s "
+                f"(skills {' '.join(arguments)}); continuing without it."
+            )
+            return None
+        except OSError as e:
+            logger.debug(f"Could not run the skills CLI: {e}")
+            return None
 
-    def _ensure_skills(self, agent: AgentCLI, required_skills: list[str]) -> None:
-        """Warn about any of ``required_skills`` not yet installed globally for ``agent``.
+    def _get_loaded_skills(self) -> list[str]:
+        """Check loaded skills using npx skills list -g --json."""
+        result = self._run_skills_cli("list", "-g", "--json")
+        if result is None or result.returncode != 0:
+            return []
+        try:
+            data = json.loads(result.stdout)
+        except ValueError as e:
+            logger.debug(f"Could not parse the skills listing: {e}")
+            return []
+        return [s["name"] for s in data if "name" in s]
 
-        Also gives the agent's handler a chance to reconcile where `skills` installs
-        with where the agent actually looks (see ``BaseAgentHandler.ensure_skills_discoverable``)
-        so a suggested install actually gets discovered.
+    def _skills_package(self) -> str:
+        """Return the skills repository to install from, on odev's release channel.
+
+        odev tracks a branch - ``main`` or ``beta`` - and checks its plugins out on it;
+        the skills those plugins point at live in the same two branches of their own
+        repository, and a beta plugin asking a main skill for the method it works by is
+        the sort of mismatch that shows up as an agent doing something no code in the
+        checkout can explain. Anything else in ``update.release`` names a branch of odev
+        rather than of the skills repository, so the default branch is asked for instead.
         """
-        agent.handler.ensure_skills_discoverable()
-
-<<<<<<< Updated upstream
-        loaded_skills = self._get_loaded_skills()
-        missing_skills = [s for s in required_skills if s not in loaded_skills]
-        if not missing_skills:
-            return
-
-        skills_agent = self._SKILLS_PACKAGE_AGENT_NAMES.get(agent.cli, agent.cli)
-        logger.warning(
-            f"The following skill(s) are missing: {', '.join(missing_skills)}. "
-            "For a better experience, you can load them by running:\n"
-            f"npx -y skills add odoo-ps/ps-ai-skills --skills {','.join(missing_skills)} -g -a {skills_agent}"
-        )
-=======
-    def _refresh_skills(self, skills: list[str]) -> None:
-        """Fetch the given skills again, overwriting the copies already installed.
-
-        Installing only what is missing leaves a store that never changes: a skill
-        installed once stayed at the revision it was installed at, so a rule added to it
-        reached the agents that had never loaded it and no one else. The store is the
-        agents' only copy - they read ~/.agents/skills, not the checkout - so it has to
-        be brought forward on its own.
-
-        Rate-limited by ``skills.interval`` rather than done on every run: a refresh
-        clones the skills repository, and paying a network round trip to start every
-        agent is how a check like this ends up being turned off. Failures are silent by
-        design - the skills already installed still work, and a run is not worth losing
-        over a fetch that did not answer.
-
-        Note that this overwrites a skill edited in place: the store is a checkout of the
-        repository, not somewhere to keep local changes. Edit the repository and let the
-        refresh bring them down.
-        """
-        if not self.config.skills.is_refresh_needed():
-            return
-
-        logger.debug(f"Refreshing the installed skill(s): {', '.join(skills)}...")
-
-        # `update`, not `add`: adding a skill that is already installed is a no-op, which
-        # is why the store never moved. Update compares the hash of the upstream skill
-        # folder against the one recorded at install time and refetches on a mismatch -
-        # so it costs nothing when nothing changed, and overwrites when something did.
-        if self._run_skills_cli("update", *skills, "-g", "-y") is None:
-            return
-
-        # Recorded on the attempt rather than on a verified result: what the CLI
-        # overwrote cannot be told apart from what it left alone, and a store that
-        # cannot be refreshed should still not be retried on every command.
-        self.config.skills.date = datetime.now()
+        release = self.config.update.release
+        return f"{SKILLS_REPO}#{release}" if release in ("main", "beta") else SKILLS_REPO
 
     def _install_skills(self, skills: list[str]) -> list[str]:
         """Install skills globally from the PS skills repo, return those still missing."""
@@ -569,13 +510,8 @@ class AICommandMixin:
         if not wanted:
             return
 
-        installed = self._get_loaded_skills()
-        missing = [s for s in wanted if s not in installed]
+        missing = [s for s in wanted if s not in self._get_loaded_skills()]
         still_missing = self._install_skills(missing) if missing else []
-
-        # The ones that were already there, which installing would not have touched.
-        if already_installed := [s for s in wanted if s in installed]:
-            self._refresh_skills(already_installed)
 
         # Agents the skills CLI does not install to need the files copied over.
         skills_dir = handler.get_global_skills_dir() if handler else None
@@ -590,23 +526,17 @@ class AICommandMixin:
             )
         elif missing:
             logger.info(f"Loaded skill(s): {', '.join(missing)}")
->>>>>>> Stashed changes
 
     def run_ai_agent(
         self,
         prompt: str,
         database: str | None = None,
-        version: str | None = None,
         ephemeral_pg: bool = True,
-        mcp_servers: dict[str, dict] | None = None,
         extra_ro_bind_dirs: list[str] | None = None,
+        mcp_servers: dict | None = None,
     ) -> bool:
-        """Helper to run the AI agent with common Odoo-related sandbox paths.
-
-        ``extra_ro_bind_dirs`` are mounted readable but not writable, on top of the
-        read-write dirs the caller passes through -d/--dirs.
-        """
-        sandbox_dirs = self._get_sandbox_dirs(database, version or self.args.version)
+        """Helper to run the AI agent with common Odoo-related sandbox paths."""
+        sandbox_dirs = self._get_sandbox_dirs(database)
 
         if database:
             should_clone = self._ensure_database_safety(database)
@@ -615,18 +545,15 @@ class AICommandMixin:
 
         agent = self.get_ai_agent()
 
-        required_skills = ["odev"]
-        if self._name == "test":
-            required_skills.append("test_skill")
-        self._ensure_skills(agent, required_skills)
+        self._ensure_skills(self.required_skills, handler=agent.handler)
 
         return agent.run(
             prompt,
             sandbox_dirs=sandbox_dirs,
             extra_bind_dirs=[str(d) for d in self.args.dirs] or None,
-            extra_ro_bind_dirs=extra_ro_bind_dirs or None,
+            extra_ro_bind_dirs=extra_ro_bind_dirs,
+            mcp_servers=mcp_servers,
             database=database,
             resume=self.args.resume,
             ephemeral_pg=ephemeral_pg,
-            mcp_servers=mcp_servers,
         )

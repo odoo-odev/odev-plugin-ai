@@ -4,16 +4,20 @@ Holds platform-agnostic logic (bind resolution, agent config sanitization,
 warning rendering) and defines the contract that backends must implement.
 """
 
+import contextlib
 import os
 import shutil
 import signal
 import subprocess
 import sys
 from abc import ABC, abstractmethod
+from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
 
+from odev.common import string
 from odev.common.console import console
+from odev.common.databases.local import LocalDatabase
 from odev.common.logging import logging
 from odev.common.mixins.framework import OdevFrameworkMixin
 from odev.common.odoobin import odoo_repositories
@@ -50,13 +54,6 @@ class ExecutionSpec:
     active_venv_path: Path | None = None
     odoo_filestore: Path | None = None
     primary_dirs: list[Path] | None = None
-    mcp_servers: dict | None = None
-    """MCP servers mounted for this run, as written to the agent's ``--mcp-config``.
-
-    Carried on the spec for the sole purpose of naming them in the security warning:
-    a bind mount of the config file says a server exists, not what it reaches. These
-    are the one part of the sandbox that talks to the network.
-    """
 
 
 class Sandbox(OdevFrameworkMixin, ABC):
@@ -118,8 +115,6 @@ class Sandbox(OdevFrameworkMixin, ABC):
 
         Singletons are shown as-is. The final list is sorted alphabetically.
         """
-        from collections import defaultdict
-
         home = str(Path.home().resolve())
 
         groups: dict[tuple[str, str], list[str]] = defaultdict(list)
@@ -143,55 +138,7 @@ class Sandbox(OdevFrameworkMixin, ABC):
 
         return sorted(result, key=lambda x: x[0])
 
-<<<<<<< Updated upstream
-    def _display_sandbox_warning(
-=======
-    # Header names whose value is a credential and never belongs on screen. Matched as
-    # substrings, lowercased: a header called "X-Api-Key" must redact as surely as
-    # "Authorization" does, and the list of names a server may pick is open-ended.
-    _SECRET_HEADER_HINTS = ("authorization", "api-key", "apikey", "token", "secret", "password", "cookie")
-
-    @classmethod
-    def _redact_header(cls, name: str, value: str) -> str:
-        """Return a header rendered for display, with credentials masked.
-
-        A header binding the connection to one record - Ps-Tools' task id, say - is the
-        interesting half of the pair and is shown in full: it is what limits the reach
-        of the key beside it, so hiding it would hide the mitigation, not the risk.
-        """
-        if any(hint in name.lower() for hint in cls._SECRET_HEADER_HINTS):
-            return "<hidden>"
-
-        return value
-
-    def _display_mcp_servers(self, mcp_servers: dict | None) -> None:
-        """List the MCP servers the agent is given, and what each one reaches.
-
-        The bind mount of the config file already appears under INFRASTRUCTURE, which
-        tells the reader a server is mounted and nothing about where it connects. MCP
-        servers are the only part of this sandbox that leaves the machine, so they are
-        named here, next to the filesystem and database access they sit beside.
-        """
-        if not mcp_servers:
-            return
-
-        console.print(f"\n{string.stylize('MCP SERVERS (Network Access):', 'bold color.cyan')}")
-
-        for name, config in sorted(mcp_servers.items()):
-            if not isinstance(config, dict):
-                console.print(f" • {string.stylize(name, 'color.purple')}")
-                continue
-
-            # An http/sse server carries a url; a stdio one carries a command to spawn.
-            target = config.get("url") or " ".join([config.get("command", ""), *config.get("args", [])]).strip()
-            kind = config.get("type") or ("stdio" if config.get("command") else "http")
-            console.print(f" • {string.stylize(name, 'color.purple')} ({kind}) -> {target or 'unknown target'}")
-
-            for header, value in (config.get("headers") or {}).items():
-                console.print(f"     {header}: {self._redact_header(header, str(value))}")
-
     def _display_sandbox_warning(  # noqa: PLR0912,PLR0913,PLR0915 - sequential bind-mount assembly, splitting it would obscure the security logic
->>>>>>> Stashed changes
         self,
         binds: list[tuple[Path, Path, bool, bool]],
         agent_dirs: list[Path],
@@ -202,13 +149,10 @@ class Sandbox(OdevFrameworkMixin, ABC):
         active_venv_path: Path | None = None,
         odoo_filestore: Path | None = None,
         primary_dirs: list[Path] | None = None,
-        mcp_servers: dict | None = None,
     ) -> bool:
         """Display a warning message about the sandbox access and security risks."""
         if self.headless:
             return True
-
-        from odev.common import string
 
         console.rule(string.stylize("AI SANDBOX SECURITY WARNING", "bold color.red"), style="color.red")
 
@@ -269,17 +213,12 @@ class Sandbox(OdevFrameworkMixin, ABC):
                 f"The agent will be able to see and potentially access {string.stylize('ALL', 'bold')} your local databases."
             )
 
-        self._display_mcp_servers(mcp_servers)
-
         # Build list of infrastructure/reference paths
         infra_items: list[tuple[Path, str]] = []
         mapping_lines: list[tuple[str, str]] = []
 
-        for d in agent_dirs:
-            infra_items.append((d, "RW"))
-        for f in agent_files:
-            if f.exists():
-                infra_items.append((f, "RW"))
+        infra_items.extend((d, "RW") for d in agent_dirs)
+        infra_items.extend((f, "RW") for f in agent_files if f.exists())
         if odoo_filestore and odoo_filestore.exists():
             infra_items.append((odoo_filestore, "RW"))
         if active_venv_path and active_venv_path.exists():
@@ -362,11 +301,6 @@ class Sandbox(OdevFrameworkMixin, ABC):
         """Build the flat list of sandbox bindings across the 3 binding categories.
 
         Public entry point used by `AgentCLI` to assemble an `ExecutionSpec`.
-
-        ``extra_ro_bind_dirs`` are mounted read-only, for source the agent should read
-        but never write: a worktree shared with the rest of odev is one of them. They
-        are sorted below, after the writable binds they may sit inside, so the
-        read-only mount of a subdirectory wins over the writable mount of its parent.
         """
 
         def bind(src, dst=None, ro=True, primary=False):
@@ -385,8 +319,9 @@ class Sandbox(OdevFrameworkMixin, ABC):
                     *[bind(host, guest, ro=False, primary=True) for host, guest in effective_sandbox_binds],
                     # Type B — extra dirs provided by the caller (RW, now Primary)
                     *[bind(e, ro=False, primary=True) for e in (extra_bind_dirs or [])],
-                    # Type B — extra dirs the caller wants readable but not writable
-                    *[bind(e) for e in (extra_ro_bind_dirs or [])],
+                    # Type B — extra dirs provided by the caller (RO, still Primary so the
+                    # agent gets them via --add-dir/trustedDirectories, just can't edit them)
+                    *[bind(e, ro=True, primary=True) for e in (extra_ro_bind_dirs or [])],
                     # Type A — odev infrastructure (parents are mounted before children, no dedup)
                     bind(self.odev.path),
                     bind(self.odev.plugins_path),
@@ -411,8 +346,6 @@ class Sandbox(OdevFrameworkMixin, ABC):
 
     def _resolve_active_venv(self, database: str | None, version: str | None) -> Path | None:
         """Return the active virtualenv path (used to prepend $PATH), or None."""
-        from odev.common.databases.local import LocalDatabase
-
         if database:
             db = LocalDatabase(database)
             if db.exists:
@@ -455,16 +388,7 @@ class Sandbox(OdevFrameworkMixin, ABC):
                     shutil.copy2(src, playground / gcn)
 
         trusted_paths = [str(host_home), "/knowledge", str(self.odev.home_path / "worktrees"), "/upgrade"]
-<<<<<<< Updated upstream
-        for d in all_candidate_paths:
-            if ":" in d:
-                trusted_paths.append(d.split(":")[1])
-=======
-        # The guest path of every workspace, which is what the agent is started in and
-        # what it checks its trust against. Written as a plain path, and as "src:dst"
-        # where a bind moves it: only the destination exists inside the sandbox.
-        trusted_paths.extend(path.split(":")[-1] for path in all_candidate_paths)
->>>>>>> Stashed changes
+        trusted_paths.extend(d.split(":")[1] for d in all_candidate_paths if ":" in d)
 
         if rel_dir := self.handler.get_agent_config_rel_path():
             is_persistent = rel_dir in persistent_dirs
@@ -495,10 +419,8 @@ class Sandbox(OdevFrameworkMixin, ABC):
     def _cleanup_paths(paths: list[Path]) -> None:
         """Best-effort recursive removal of temp dirs after execution."""
         for path_to_clean in paths:
-            try:
+            with contextlib.suppress(Exception):
                 shutil.rmtree(path_to_clean)
-            except Exception:
-                pass
 
     @staticmethod
     def _terminate_pg(pg_process: subprocess.Popen | None) -> None:
@@ -523,18 +445,17 @@ class Sandbox(OdevFrameworkMixin, ABC):
             else:
                 pg_process.terminate()
             pg_process.wait(timeout=5)
+        except Exception as e:  # noqa: BLE001 - fall through to the SIGKILL ladder below
+            logger.debug(f"Could not terminate the postgres process gracefully: {e}")
+        else:
             return
-        except (subprocess.TimeoutExpired, Exception):
-            pass
 
         try:
             if pgid is not None:
                 os.killpg(pgid, signal.SIGKILL)
             else:
                 pg_process.kill()
-        except Exception:
-            pass
-        try:
+        except Exception as e:  # noqa: BLE001 - last-resort kill, nothing left to try
+            logger.debug(f"Could not kill the postgres process: {e}")
+        with contextlib.suppress(Exception):
             pg_process.wait(timeout=2)
-        except Exception:
-            pass
