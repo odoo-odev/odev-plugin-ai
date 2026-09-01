@@ -270,6 +270,7 @@ class AgentCLI(OdevFrameworkMixin):
             active_venv_path=active_venv_path,
             odoo_filestore=host_home / ".local" / "share" / "Odoo",
             primary_dirs=[Path(d) for d in sandbox_dirs],
+            mcp_servers=mcp_servers,
         )
 
         return self.sandbox.execute(spec)

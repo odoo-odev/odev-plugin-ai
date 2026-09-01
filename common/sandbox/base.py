@@ -6,6 +6,7 @@ warning rendering) and defines the contract that backends must implement.
 
 import contextlib
 import os
+import shlex
 import shutil
 import signal
 import subprocess
@@ -54,6 +55,7 @@ class ExecutionSpec:
     active_venv_path: Path | None = None
     odoo_filestore: Path | None = None
     primary_dirs: list[Path] | None = None
+    mcp_servers: dict | None = None
 
 
 class Sandbox(OdevFrameworkMixin, ABC):
@@ -149,6 +151,7 @@ class Sandbox(OdevFrameworkMixin, ABC):
         active_venv_path: Path | None = None,
         odoo_filestore: Path | None = None,
         primary_dirs: list[Path] | None = None,
+        mcp_servers: dict | None = None,
     ) -> bool:
         """Display a warning message about the sandbox access and security risks."""
         if self.headless:
@@ -255,6 +258,16 @@ class Sandbox(OdevFrameworkMixin, ABC):
             if line not in seen_mappings:
                 seen_mappings.add(line)
                 console.print(f" • {string.stylize(line, 'color.purple')} ({mode})")
+
+        if mcp_servers:
+            console.print(f"\n{string.stylize('MCP SERVERS (Reach Outside The Sandbox):', 'bold color.cyan')}")
+            for name, server in mcp_servers.items():
+                command = [server.get("command"), *server.get("args", [])]
+                target = server.get("url") or shlex.join([str(part) for part in command if part])
+                console.print(
+                    f" • {string.stylize(name, 'color.purple')}"
+                    + (f" ({string.stylize(target, 'color.purple')})" if target else "")
+                )
 
         if not self.yolo and not console.bypass_prompt:
             agent_names = {
