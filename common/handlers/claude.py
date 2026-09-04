@@ -76,7 +76,7 @@ class ClaudeHandler(BaseAgentHandler):
             if not junk_file.exists():
                 junk_file.write_text(json.dumps(structure))
 
-    def get_command(self, prompt, resume, all_candidate_paths, model, headless, yolo):  # noqa: PLR0913 - signature set by BaseAgentHandler
+    def get_command(self, prompt, resume, all_candidate_paths, model, headless, yolo, mcp_server_names=()):  # noqa: PLR0913 - signature set by BaseAgentHandler
         cmd = ["claude"]
         if prompt:
             if headless:
@@ -88,14 +88,12 @@ class ClaudeHandler(BaseAgentHandler):
         if yolo:
             cmd.append("--dangerously-skip-permissions")
         else:
-            cmd.extend(
-                [
-                    "--permission-mode",
-                    "acceptEdits",
-                    "--allowedTools",
-                    "Bash(rtk:*),Bash(odev:*),Bash(git:*),Bash(pre-commit:*),Read,Edit",
-                ]
-            )
+            allowed_tools = ["Bash(rtk:*)", "Bash(odev:*)", "Bash(git:*)", "Bash(pre-commit:*)", "Read", "Edit"]
+            # Tools of a server are named mcp__<server>__<tool>; the bare server name
+            # allows all of them, so a prompt telling the agent to call an MCP tool does
+            # not turn into a permission prompt per tool.
+            allowed_tools.extend(f"mcp__{server}" for server in mcp_server_names)
+            cmd.extend(["--permission-mode", "acceptEdits", "--allowedTools", ",".join(allowed_tools)])
         if model and model != "auto":
             cmd.extend(["--model", model])
         for path in self._guest_paths(all_candidate_paths):

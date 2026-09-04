@@ -70,9 +70,7 @@ class AgyHandler(BaseAgentHandler):
         except OSError as e:
             logger.warning(f"Could not set up the Antigravity skills symlink: {e}")
 
-    def get_command(
-        self, prompt, resume, all_candidate_paths, model, headless, yolo, mcp_config=None, mcp_server_names=()
-    ):
+    def get_command(self, prompt, resume, all_candidate_paths, model, headless, yolo, mcp_server_names=()):  # noqa: PLR0913 - signature set by BaseAgentHandler
         home = Path.home()
         agy_creds = home / ".antigravity" / "oauth_creds.json"
         gemini_creds = home / ".gemini" / "oauth_creds.json"

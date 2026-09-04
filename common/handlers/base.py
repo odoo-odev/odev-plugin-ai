@@ -60,7 +60,7 @@ class BaseAgentHandler:
     def cleanup_junk(self, target_dir):
         """Clean up junk files that might cause leakage or crashes."""
 
-    def get_command(self, prompt, resume, all_candidate_paths, model, headless, yolo):  # noqa: PLR0913 - every agent needs the full invocation context
+    def get_command(self, prompt, resume, all_candidate_paths, model, headless, yolo, mcp_server_names=()):  # noqa: PLR0913 - every agent needs the full invocation context
         """Build the command line for the agent."""
         raise NotImplementedError
 

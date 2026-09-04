@@ -55,6 +55,7 @@ class AgentCLI(OdevFrameworkMixin):
         resume: str | None,
         all_candidate_paths: list[str],
         host_home: Path,
+        mcp_server_names: tuple[str, ...] = (),
     ) -> tuple[list[str], list[Path], list[Path]]:
         """Determine agent-specific command, directories, and files to mount."""
         agent_dirs = [
@@ -89,6 +90,7 @@ class AgentCLI(OdevFrameworkMixin):
             model=self.model,
             headless=self.headless,
             yolo=self.yolo,
+            mcp_server_names=mcp_server_names,
         )
 
         # Deduplicate directories and files while preserving order
@@ -218,7 +220,9 @@ class AgentCLI(OdevFrameworkMixin):
         # Candidate paths for trustedDirectories and --add-dir inclusion
         all_candidate_paths = [str(dst) for src, dst, _, primary in final_binds if src != host_home and primary]
 
-        agent_cmd, agent_dirs, agent_files = self._get_agent_setup(prompt, resume, all_candidate_paths, host_home)
+        agent_cmd, agent_dirs, agent_files = self._get_agent_setup(
+            prompt, resume, all_candidate_paths, host_home, tuple(mcp_servers or ())
+        )
 
         if not agent_cmd:
             return False
