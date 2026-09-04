@@ -82,8 +82,11 @@ class AgyHandler(BaseAgentHandler):
                 gemini_accts = home / ".gemini" / "google_accounts.json"
                 if gemini_accts.exists():
                     shutil.copy2(gemini_accts, home / ".antigravity" / "google_accounts.json")
-            except Exception:
-                pass
+            except OSError as e:
+                # Not fatal - agy asks for a login of its own. Said out loud all the same:
+                # silently skipping the copy leaves the agent at a login prompt inside the
+                # sandbox with nothing on screen to say why.
+                logger.warning(f"Could not seed the Antigravity credentials from Gemini's: {e}")
 
         cmd = ["agy"]
         if prompt:
