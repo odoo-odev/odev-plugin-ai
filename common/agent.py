@@ -5,6 +5,7 @@ import sys
 import tempfile
 from pathlib import Path
 
+from odev.common.connectors.git import GITHUB_DOMAIN
 from odev.common.logging import logging
 from odev.common.mixins.framework import OdevFrameworkMixin
 
@@ -33,7 +34,7 @@ class AgentCLI(OdevFrameworkMixin):
         super().__init__()
         host_home = Path.home().resolve()
 
-        from odev.common.odev import Odev
+        from odev.common.odev import Odev  # noqa: PLC0415 - avoid a circular import with the framework root
 
         self.cli = cli
         self.model = model
@@ -48,39 +49,12 @@ class AgentCLI(OdevFrameworkMixin):
             headless=headless,
         )
 
-    def _write_mcp_config(
-        self,
-        mcp_servers: dict[str, dict],
-        playground: Path,
-        host_home: Path,
-    ) -> str | None:
-        """Write the MCP server config and return the path the agent will see.
-
-        The playground is bound over the home directory inside the sandbox, so the file
-        is written here but read there — the returned path only resolves in the guest.
-        """
-        if not self.handler.supports_mcp:
-            logger.warning(f"{self.cli} does not support MCP servers, {len(mcp_servers)} server(s) ignored.")
-            return None
-
-        config_name = ".odev-mcp-config.json"
-
-        try:
-            (playground / config_name).write_text(json.dumps({"mcpServers": mcp_servers}, indent=2))
-        except OSError as e:
-            logger.warning(f"Could not write the MCP configuration, the agent will run without it: {e}")
-            return None
-
-        logger.debug(f"Declared MCP server(s) to {self.cli}: {', '.join(mcp_servers)}")
-        return str(host_home / config_name)
-
     def _get_agent_setup(
         self,
         prompt: str | None,
         resume: str | None,
         all_candidate_paths: list[str],
         host_home: Path,
-        mcp_config: str | None = None,
         mcp_server_names: tuple[str, ...] = (),
     ) -> tuple[list[str], list[Path], list[Path]]:
         """Determine agent-specific command, directories, and files to mount."""
@@ -95,10 +69,8 @@ class AgentCLI(OdevFrameworkMixin):
             host_home / ".gitconfig",
         ]
 
-        for d in self.handler.get_config_dirs():
-            agent_dirs.append(host_home / d)
-        for f in self.handler.get_config_files():
-            agent_files.append(host_home / f)
+        agent_dirs.extend(host_home / d for d in self.handler.get_config_dirs())
+        agent_files.extend(host_home / f for f in self.handler.get_config_files())
 
         # Node.js managers (NVM, n, asdf)
         for node_dir in [".nvm", ".n", ".asdf"]:
@@ -118,7 +90,6 @@ class AgentCLI(OdevFrameworkMixin):
             model=self.model,
             headless=self.headless,
             yolo=self.yolo,
-            mcp_config=mcp_config,
             mcp_server_names=mcp_server_names,
         )
 
@@ -175,30 +146,21 @@ class AgentCLI(OdevFrameworkMixin):
         # Deduplicate while preserving order
         return ":".join(dict.fromkeys(items))
 
-    def run(
+    def run(  # noqa: PLR0913,PLR0915 - carries the full sandbox invocation context
         self,
         prompt: str,
         sandbox_dirs: list[str],
         extra_bind_dirs: list[str] | None = None,
         extra_ro_bind_dirs: list[str] | None = None,
+        mcp_servers: dict | None = None,
         database: str | None = None,
         db_user: str | None = None,
         version: str | None = None,
         resume: str | None = None,
         ephemeral_pg: bool = True,
         cwd: str | None = None,
-        mcp_servers: dict[str, dict] | None = None,
     ) -> bool:
-        """Run the AI agent within the platform-appropriate sandbox.
-
-        ``mcp_servers`` maps a server name to its stdio launch definition, exposing its
-        tools to the agent. Each definition carries its own environment: a stdio MCP
-        server inherits only an allowlist from the agent, so the sandbox secrets do not
-        reach it.
-
-        ``extra_ro_bind_dirs`` are mounted readable but not writable, for source the
-        agent is meant to consult rather than edit.
-        """
+        """Run the AI agent within the platform-appropriate sandbox."""
         # Reap any leftover ephemeral postgres clusters / sandbox tmp dirs
         # from previous Ctrl+C'd or crashed runs before we start fresh ones.
         PostgresSandbox.cleanup_orphans()
@@ -232,6 +194,18 @@ class AgentCLI(OdevFrameworkMixin):
         final_binds = sandbox_data["binds"]
         active_venv_path = sandbox_data["active_venv_path"]
 
+        mcp_config_path = None
+        if mcp_servers:
+            # A plain RO bind, same shape as every other directory in final_binds: no
+            # backend-specific remapping to reason about, unlike playground (overlaid
+            # onto $HOME on Linux only) or sandbox_tmp (remapped to /tmp on Linux only).
+            mcp_dir = playground / "mcp"
+            mcp_dir.mkdir(parents=True, exist_ok=True)
+            mcp_config_file = mcp_dir / "mcp-config.json"
+            mcp_config_file.write_text(json.dumps({"mcpServers": mcp_servers}))
+            final_binds.append((mcp_dir.resolve(), mcp_dir.resolve(), True, False))
+            mcp_config_path = str(mcp_config_file.resolve())
+
         if not cwd:
             # Prioritize the first directory in sandbox_dirs (the main project path)
             if sandbox_dirs:
@@ -246,18 +220,14 @@ class AgentCLI(OdevFrameworkMixin):
         # Candidate paths for trustedDirectories and --add-dir inclusion
         all_candidate_paths = [str(dst) for src, dst, _, primary in final_binds if src != host_home and primary]
 
-        mcp_config = self._write_mcp_config(mcp_servers, playground, host_home) if mcp_servers else None
         agent_cmd, agent_dirs, agent_files = self._get_agent_setup(
-            prompt,
-            resume,
-            all_candidate_paths,
-            host_home,
-            mcp_config=mcp_config,
-            mcp_server_names=tuple(mcp_servers) if mcp_config else (),
+            prompt, resume, all_candidate_paths, host_home, tuple(mcp_servers or ())
         )
 
         if not agent_cmd:
             return False
+
+        agent_cmd.extend(self.handler.get_mcp_config_args(mcp_config_path))
 
         if database:
             db_info = (
@@ -304,6 +274,7 @@ class AgentCLI(OdevFrameworkMixin):
             active_venv_path=active_venv_path,
             odoo_filestore=host_home / ".local" / "share" / "Odoo",
             primary_dirs=[Path(d) for d in sandbox_dirs],
+            mcp_servers=mcp_servers,
         )
 
         return self.sandbox.execute(spec)
@@ -324,15 +295,13 @@ class AgentCLI(OdevFrameworkMixin):
                 sessions = data.get("sessions", [])
                 if sessions:
                     return sessions[-1].get("id")
-        except Exception as e:
+        except (OSError, ValueError, AttributeError) as e:
             logger.debug(f"Could not read latest session id for {self.cli!r}: {e}")
         return None
 
     def _setup_github_token(self) -> list[tuple[str, str]]:
         """Retrieve GITHUB_TOKEN for PR creation and other GitHub operations."""
         try:
-            from odev.common.connectors.git import GITHUB_DOMAIN
-
             token = self.store.secrets.get(
                 GITHUB_DOMAIN,
                 scope="api",
@@ -342,7 +311,7 @@ class AgentCLI(OdevFrameworkMixin):
 
             if token:
                 return [("GITHUB_TOKEN", token), ("GH_TOKEN", token)]
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 - the secret store may raise anything, the token is optional
             logger.debug(f"Could not retrieve GitHub secret: {e}")
 
         return []

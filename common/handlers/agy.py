@@ -10,6 +10,10 @@ logger = logging.getLogger(__name__)
 
 
 class AgyHandler(BaseAgentHandler):
+    # `agy --continue` reads Antigravity's own conversation store, which is the only
+    # thing that knows which of its conversations is resumable.
+    resolves_latest_natively = True
+
     def get_config_dirs(self):
         return [".antigravity", ".config/antigravity", ".gemini", ".config/gemini"]
 
@@ -66,9 +70,7 @@ class AgyHandler(BaseAgentHandler):
         except OSError as e:
             logger.warning(f"Could not set up the Antigravity skills symlink: {e}")
 
-    def get_command(
-        self, prompt, resume, all_candidate_paths, model, headless, yolo, mcp_config=None, mcp_server_names=()
-    ):
+    def get_command(self, prompt, resume, all_candidate_paths, model, headless, yolo, mcp_server_names=()):  # noqa: PLR0913 - signature set by BaseAgentHandler
         home = Path.home()
         agy_creds = home / ".antigravity" / "oauth_creds.json"
         gemini_creds = home / ".gemini" / "oauth_creds.json"
@@ -80,8 +82,11 @@ class AgyHandler(BaseAgentHandler):
                 gemini_accts = home / ".gemini" / "google_accounts.json"
                 if gemini_accts.exists():
                     shutil.copy2(gemini_accts, home / ".antigravity" / "google_accounts.json")
-            except Exception:
-                pass
+            except OSError as e:
+                # Not fatal - agy asks for a login of its own. Said out loud all the same:
+                # silently skipping the copy leaves the agent at a login prompt inside the
+                # sandbox with nothing on screen to say why.
+                logger.warning(f"Could not seed the Antigravity credentials from Gemini's: {e}")
 
         cmd = ["agy"]
         if prompt:

@@ -9,8 +9,6 @@ logger = logging.getLogger(__name__)
 
 
 class ClaudeHandler(BaseAgentHandler):
-    supports_mcp = True
-
     def get_config_dirs(self):
         return [".claude", ".config/claude"]
 
@@ -62,9 +60,9 @@ class ClaudeHandler(BaseAgentHandler):
                         project = projects.setdefault(path, {})
                         project["hasTrustDialogAccepted"] = True
                     claude_json_file.write_text(json.dumps(claude_data, indent=2))
-                except Exception:
-                    pass
-        except Exception as e:
+                except (OSError, ValueError, AttributeError) as e:
+                    logger.debug(f"Failed to inject project trust into .claude.json: {e}")
+        except (OSError, ValueError, AttributeError) as e:
             logger.debug(f"Failed to inject Claude trust: {e}")
 
     def cleanup_junk(self, target_dir):
@@ -78,9 +76,7 @@ class ClaudeHandler(BaseAgentHandler):
             if not junk_file.exists():
                 junk_file.write_text(json.dumps(structure))
 
-    def get_command(
-        self, prompt, resume, all_candidate_paths, model, headless, yolo, mcp_config=None, mcp_server_names=()
-    ):
+    def get_command(self, prompt, resume, all_candidate_paths, model, headless, yolo, mcp_server_names=()):  # noqa: PLR0913 - signature set by BaseAgentHandler
         cmd = ["claude"]
         if prompt:
             if headless:
@@ -89,23 +85,22 @@ class ClaudeHandler(BaseAgentHandler):
                 cmd.append(prompt)
         if resume:
             cmd.extend(["--session-id", resume])
-
-        allowed_tools = ["Bash(rtk:*)", "Bash(odev:*)", "Bash(git:*)", "Bash(pre-commit:*)", "Read", "Edit"]
-
-        if mcp_config:
-            # --strict-mcp-config keeps the agent to the servers odev declared, ignoring
-            # any config the host user happens to have.
-            cmd.extend(["--mcp-config", mcp_config, "--strict-mcp-config"])
-            # Tools of a server are named mcp__<server>__<tool>; the bare server name
-            # allows all of its tools. Without this the allowlist below blocks them.
-            allowed_tools.extend(f"mcp__{server}" for server in mcp_server_names)
-
         if yolo:
             cmd.append("--dangerously-skip-permissions")
         else:
+            allowed_tools = ["Bash(rtk:*)", "Bash(odev:*)", "Bash(git:*)", "Bash(pre-commit:*)", "Read", "Edit"]
+            # Tools of a server are named mcp__<server>__<tool>; the bare server name
+            # allows all of them, so a prompt telling the agent to call an MCP tool does
+            # not turn into a permission prompt per tool.
+            allowed_tools.extend(f"mcp__{server}" for server in mcp_server_names)
             cmd.extend(["--permission-mode", "acceptEdits", "--allowedTools", ",".join(allowed_tools)])
         if model and model != "auto":
             cmd.extend(["--model", model])
         for path in self._guest_paths(all_candidate_paths):
             cmd.extend(["--add-dir", path])
         return cmd
+
+    def get_mcp_config_args(self, mcp_config_path: str | None) -> list[str]:
+        if not mcp_config_path:
+            return []
+        return ["--mcp-config", mcp_config_path]

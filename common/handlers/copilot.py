@@ -14,9 +14,7 @@ class CopilotHandler(BaseAgentHandler):
     def get_agent_config_rel_path(self):
         return ".copilot"
 
-    def get_command(
-        self, prompt, resume, all_candidate_paths, model, headless, yolo, mcp_config=None, mcp_server_names=()
-    ):
+    def get_command(self, prompt, resume, all_candidate_paths, model, headless, yolo, mcp_server_names=()):  # noqa: PLR0913 - signature set by BaseAgentHandler
         cmd = ["copilot"]
         if prompt:
             cmd.extend(["-p" if headless else "-i", prompt])

@@ -4,16 +4,21 @@ Holds platform-agnostic logic (bind resolution, agent config sanitization,
 warning rendering) and defines the contract that backends must implement.
 """
 
+import contextlib
 import os
+import shlex
 import shutil
 import signal
 import subprocess
 import sys
 from abc import ABC, abstractmethod
+from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
 
+from odev.common import string
 from odev.common.console import console
+from odev.common.databases.local import LocalDatabase
 from odev.common.logging import logging
 from odev.common.mixins.framework import OdevFrameworkMixin
 from odev.common.odoobin import odoo_repositories
@@ -50,6 +55,7 @@ class ExecutionSpec:
     active_venv_path: Path | None = None
     odoo_filestore: Path | None = None
     primary_dirs: list[Path] | None = None
+    mcp_servers: dict | None = None
 
 
 class Sandbox(OdevFrameworkMixin, ABC):
@@ -111,8 +117,6 @@ class Sandbox(OdevFrameworkMixin, ABC):
 
         Singletons are shown as-is. The final list is sorted alphabetically.
         """
-        from collections import defaultdict
-
         home = str(Path.home().resolve())
 
         groups: dict[tuple[str, str], list[str]] = defaultdict(list)
@@ -136,7 +140,7 @@ class Sandbox(OdevFrameworkMixin, ABC):
 
         return sorted(result, key=lambda x: x[0])
 
-    def _display_sandbox_warning(
+    def _display_sandbox_warning(  # noqa: PLR0912,PLR0913,PLR0915 - sequential bind-mount assembly, splitting it would obscure the security logic
         self,
         binds: list[tuple[Path, Path, bool, bool]],
         agent_dirs: list[Path],
@@ -147,12 +151,11 @@ class Sandbox(OdevFrameworkMixin, ABC):
         active_venv_path: Path | None = None,
         odoo_filestore: Path | None = None,
         primary_dirs: list[Path] | None = None,
+        mcp_servers: dict | None = None,
     ) -> bool:
         """Display a warning message about the sandbox access and security risks."""
         if self.headless:
             return True
-
-        from odev.common import string
 
         console.rule(string.stylize("AI SANDBOX SECURITY WARNING", "bold color.red"), style="color.red")
 
@@ -217,11 +220,8 @@ class Sandbox(OdevFrameworkMixin, ABC):
         infra_items: list[tuple[Path, str]] = []
         mapping_lines: list[tuple[str, str]] = []
 
-        for d in agent_dirs:
-            infra_items.append((d, "RW"))
-        for f in agent_files:
-            if f.exists():
-                infra_items.append((f, "RW"))
+        infra_items.extend((d, "RW") for d in agent_dirs)
+        infra_items.extend((f, "RW") for f in agent_files if f.exists())
         if odoo_filestore and odoo_filestore.exists():
             infra_items.append((odoo_filestore, "RW"))
         if active_venv_path and active_venv_path.exists():
@@ -258,6 +258,16 @@ class Sandbox(OdevFrameworkMixin, ABC):
             if line not in seen_mappings:
                 seen_mappings.add(line)
                 console.print(f" • {string.stylize(line, 'color.purple')} ({mode})")
+
+        if mcp_servers:
+            console.print(f"\n{string.stylize('MCP SERVERS (Reach Outside The Sandbox):', 'bold color.cyan')}")
+            for name, server in mcp_servers.items():
+                command = [server.get("command"), *server.get("args", [])]
+                target = server.get("url") or shlex.join([str(part) for part in command if part])
+                console.print(
+                    f" • {string.stylize(name, 'color.purple')}"
+                    + (f" ({string.stylize(target, 'color.purple')})" if target else "")
+                )
 
         if not self.yolo and not console.bypass_prompt:
             agent_names = {
@@ -304,11 +314,6 @@ class Sandbox(OdevFrameworkMixin, ABC):
         """Build the flat list of sandbox bindings across the 3 binding categories.
 
         Public entry point used by `AgentCLI` to assemble an `ExecutionSpec`.
-
-        ``extra_ro_bind_dirs`` are mounted read-only, for source the agent should read
-        but never write: a worktree shared with the rest of odev is one of them. They
-        are sorted below, after the writable binds they may sit inside, so the
-        read-only mount of a subdirectory wins over the writable mount of its parent.
         """
 
         def bind(src, dst=None, ro=True, primary=False):
@@ -327,8 +332,9 @@ class Sandbox(OdevFrameworkMixin, ABC):
                     *[bind(host, guest, ro=False, primary=True) for host, guest in effective_sandbox_binds],
                     # Type B — extra dirs provided by the caller (RW, now Primary)
                     *[bind(e, ro=False, primary=True) for e in (extra_bind_dirs or [])],
-                    # Type B — extra dirs the caller wants readable but not writable
-                    *[bind(e) for e in (extra_ro_bind_dirs or [])],
+                    # Type B — extra dirs provided by the caller (RO, still Primary so the
+                    # agent gets them via --add-dir/trustedDirectories, just can't edit them)
+                    *[bind(e, ro=True, primary=True) for e in (extra_ro_bind_dirs or [])],
                     # Type A — odev infrastructure (parents are mounted before children, no dedup)
                     bind(self.odev.path),
                     bind(self.odev.plugins_path),
@@ -353,8 +359,6 @@ class Sandbox(OdevFrameworkMixin, ABC):
 
     def _resolve_active_venv(self, database: str | None, version: str | None) -> Path | None:
         """Return the active virtualenv path (used to prepend $PATH), or None."""
-        from odev.common.databases.local import LocalDatabase
-
         if database:
             db = LocalDatabase(database)
             if db.exists:
@@ -397,9 +401,7 @@ class Sandbox(OdevFrameworkMixin, ABC):
                     shutil.copy2(src, playground / gcn)
 
         trusted_paths = [str(host_home), "/knowledge", str(self.odev.home_path / "worktrees"), "/upgrade"]
-        for d in all_candidate_paths:
-            if ":" in d:
-                trusted_paths.append(d.split(":")[1])
+        trusted_paths.extend(d.split(":")[1] for d in all_candidate_paths if ":" in d)
 
         if rel_dir := self.handler.get_agent_config_rel_path():
             is_persistent = rel_dir in persistent_dirs
@@ -430,10 +432,8 @@ class Sandbox(OdevFrameworkMixin, ABC):
     def _cleanup_paths(paths: list[Path]) -> None:
         """Best-effort recursive removal of temp dirs after execution."""
         for path_to_clean in paths:
-            try:
+            with contextlib.suppress(Exception):
                 shutil.rmtree(path_to_clean)
-            except Exception:
-                pass
 
     @staticmethod
     def _terminate_pg(pg_process: subprocess.Popen | None) -> None:
@@ -458,18 +458,17 @@ class Sandbox(OdevFrameworkMixin, ABC):
             else:
                 pg_process.terminate()
             pg_process.wait(timeout=5)
+        except Exception as e:  # noqa: BLE001 - fall through to the SIGKILL ladder below
+            logger.debug(f"Could not terminate the postgres process gracefully: {e}")
+        else:
             return
-        except (subprocess.TimeoutExpired, Exception):
-            pass
 
         try:
             if pgid is not None:
                 os.killpg(pgid, signal.SIGKILL)
             else:
                 pg_process.kill()
-        except Exception:
-            pass
-        try:
+        except Exception as e:  # noqa: BLE001 - last-resort kill, nothing left to try
+            logger.debug(f"Could not kill the postgres process: {e}")
+        with contextlib.suppress(Exception):
             pg_process.wait(timeout=2)
-        except Exception:
-            pass
