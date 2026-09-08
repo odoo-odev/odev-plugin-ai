@@ -12,6 +12,7 @@ if TYPE_CHECKING:
 import json
 import shutil
 import subprocess
+from datetime import datetime
 from pathlib import Path
 
 from odev.common import args
@@ -28,6 +29,14 @@ logger = logging.getLogger(__name__)
 
 SKILLS_REPO = "odoo-ps/ps-ai-skills"
 GUIDELINES_SKILL = "odoo_coding_guidelines"
+"""Skill carrying how Odoo code is written: module layout, per-language conventions, and
+what a change is allowed to touch.
+
+Needed by every command here, not only the ones that write code: each of them puts an
+agent in front of a client's checkout, and the rule that a dev reformats nothing it was
+not asked to reformat - and runs pre-commit only where the repository configures it -
+holds whether the agent is scaffolding a module, fixing a test or reading the code.
+"""
 
 # Shared store the skills CLI installs into, whatever the agent.
 SKILLS_STORE = Path.home() / ".agents" / "skills"
@@ -103,8 +112,23 @@ class AICommandMixin:
 
     resume = args.String(
         aliases=["--resume"],
-        description="Resume a previous AI session by ID or 'latest'.",
+        description="Resume a previous AI session, by id or 'latest'. Defaults to the latest session, "
+        "which is the last one held in the directory the run works in.",
         default=None,
+        # A bare --resume means the latest session: it is the only one a developer can
+        # name without going to look it up, and asking to resume without saying which
+        # session has no other reading.
+        nargs="?",
+        const="latest",
+    )
+
+    edit = args.Flag(
+        # -E rather than the -e this reads like: `scaffold` spends -e on --no-excalidraw,
+        # and a second command registering the same letter is a parser that refuses to
+        # build - the command stops existing rather than the flag being ignored.
+        aliases=["-E", "--edit"],
+        description="Open the prompt in $EDITOR before sending it; save it empty to abort the run.",
+        default=False,
     )
 
     dirs = args.List(
@@ -240,6 +264,7 @@ class AICommandMixin:
             model=final_model,
             yolo=self.args.yolo,
             headless=self.args.headless,
+            edit=self.args.edit,
         )
 
     def _database_has_demo(self, database_obj) -> bool:
@@ -475,6 +500,42 @@ class AICommandMixin:
             logger.debug(f"skills add output:\n{result.stdout or result.stderr}")
         return still_missing
 
+    def _refresh_skills(self, skills: list[str]) -> None:
+        """Fetch the given skills again, overwriting the copies already installed.
+
+        Installing only what is missing leaves a store that never changes: a skill
+        installed once stayed at the revision it was installed at, so a rule added to it
+        reached the agents that had never loaded it and no one else. The store is the
+        agents' only copy - they read ~/.agents/skills, not the checkout - so it has to
+        be brought forward on its own.
+
+        Rate-limited by ``skills.interval`` rather than done on every run: a refresh
+        clones the skills repository, and paying a network round trip to start every
+        agent is how a check like this ends up being turned off. Failures are silent by
+        design - the skills already installed still work, and a run is not worth losing
+        over a fetch that did not answer.
+
+        Note that this overwrites a skill edited in place: the store is a checkout of the
+        repository, not somewhere to keep local changes. Edit the repository and let the
+        refresh bring them down.
+        """
+        if not self.config.skills.is_refresh_needed():
+            return
+
+        logger.debug(f"Refreshing the installed skill(s): {', '.join(skills)}...")
+
+        # `update`, not `add`: adding a skill that is already installed is a no-op, which
+        # is why the store never moved. Update compares the hash of the upstream skill
+        # folder against the one recorded at install time and refetches on a mismatch -
+        # so it costs nothing when nothing changed, and overwrites when something did.
+        if self._run_skills_cli("update", *skills, "-g", "-y") is None:
+            return
+
+        # Recorded on the attempt rather than on a verified result: what the CLI
+        # overwrote cannot be told apart from what it left alone, and a store that
+        # cannot be refreshed should still not be retried on every command.
+        self.config.skills.date = datetime.now()
+
     def _mirror_skills(self, skills: list[str], skills_dir: Path) -> list[str]:
         """Copy skills from the shared store into an agent-specific directory.
 
@@ -504,14 +565,28 @@ class AICommandMixin:
         return failed
 
     def _ensure_skills(self, required: list[str], handler=None) -> None:
-        """Make sure the given skills are loaded, installing the missing ones."""
+        """Make sure the given skills are loaded, installing the missing ones.
+
+        Installs rather than suggests: a warning telling the developer to run a command
+        themselves is a warning scrolled past, and the agent then works without the
+        method its prompt sends it to - silently, since a missing skill looks exactly
+        like an agent that chose not to read one.
+        """
+        if handler is not None:
+            handler.ensure_skills_discoverable()
+
         disabled = self.config.skills.disabled
         wanted = [s for s in required if s not in disabled]
         if not wanted:
             return
 
-        missing = [s for s in wanted if s not in self._get_loaded_skills()]
+        installed = self._get_loaded_skills()
+        missing = [s for s in wanted if s not in installed]
         still_missing = self._install_skills(missing) if missing else []
+
+        # The ones that were already there, which installing would not have touched.
+        if already_installed := [s for s in wanted if s in installed]:
+            self._refresh_skills(already_installed)
 
         # Agents the skills CLI does not install to need the files copied over.
         skills_dir = handler.get_global_skills_dir() if handler else None
