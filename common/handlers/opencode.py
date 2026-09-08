@@ -7,9 +7,7 @@ logger = logging.getLogger(__name__)
 
 
 class OpenCodeHandler(ClaudeHandler):
-    def get_command(
-        self, prompt, resume, all_candidate_paths, model, headless, yolo, mcp_config=None, mcp_server_names=()
-    ):
+    def get_command(self, prompt, resume, all_candidate_paths, model, headless, yolo, mcp_server_names=()):  # noqa: PLR0913 - signature set by BaseAgentHandler
         opencode_bin = self.host_home / ".opencode/bin/opencode"
         if not opencode_bin.exists():
             logger.error(f"opencode binary not found at {opencode_bin}")

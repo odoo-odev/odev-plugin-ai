@@ -21,6 +21,7 @@ Important caveats vs. bwrap:
   security boundary is enforced via file-write* deny rules.
 """
 
+import contextlib
 import os
 import shlex
 import stat
@@ -37,6 +38,14 @@ logger = logging.getLogger(__name__)
 
 
 SANDBOX_EXEC = "/usr/bin/sandbox-exec"
+
+SIGABRT_EXIT_CODE = 134
+"""Exit code of an agent killed by SIGABRT.
+
+On macOS this is what a profile too strict for the dynamic linker looks like from the
+outside: the process aborts before `main()`, so nothing it would have printed is there
+to read.
+"""
 
 
 # ---------------------------------------------------------------------------
@@ -83,7 +92,7 @@ DENY_USER_SECRETS_RELATIVE: tuple[str, ...] = (
 #: Subpaths the agent ALWAYS gets RW access to, regardless of the spec.
 ALWAYS_RW_SUBPATHS: tuple[str, ...] = (
     "/private/tmp",
-    "/tmp",
+    "/tmp",  # noqa: S108 - a subpath the profile allows writes to, not a file this writes
 )
 
 #: Literal device nodes / pipes the agent ALWAYS gets RW access to. Standard
@@ -139,16 +148,17 @@ def _check_seatbelt_support() -> tuple[bool, str]:
         )
     try:
         # Run a no-op profile to verify sandbox-exec is functional.
-        subprocess.run(
+        subprocess.run(  # noqa: S603 - a fixed argv, nothing of the caller's in it
             [SANDBOX_EXEC, "-p", "(version 1)(allow default)", "/usr/bin/true"],
             check=True,
             capture_output=True,
             timeout=2,
         )
-        return True, ""
     except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError) as e:
         stderr = getattr(e, "stderr", b"").decode() if getattr(e, "stderr", None) else str(e)
         return False, f"sandbox-exec self-test failed: {stderr.strip()}"
+    else:
+        return True, ""
 
 
 class SeatbeltSandbox(Sandbox):
@@ -205,7 +215,7 @@ class SeatbeltSandbox(Sandbox):
         tmpdir = os.environ.get("TMPDIR")
         if tmpdir:
             candidates.append(Path(tmpdir))
-        candidates.append(Path("/tmp"))
+        candidates.append(Path("/tmp"))  # noqa: S108 - searched for editor sockets, not written to
         candidates.append(Path("/private/tmp"))
 
         seen: set[Path] = set()
@@ -218,10 +228,8 @@ class SeatbeltSandbox(Sandbox):
                 continue
             seen.add(resolved)
             for pattern in ("vscode-*.sock", "cursor-*.sock", "antigravity-*.sock", "*-ipc-*.sock"):
-                try:
+                with contextlib.suppress(OSError):
                     sockets.extend(resolved.glob(pattern))
-                except OSError:
-                    pass
         return sockets
 
     def _collect_rw_paths(
@@ -284,21 +292,17 @@ class SeatbeltSandbox(Sandbox):
             "",
             ";; --- Block writes to the OS itself --------------------------",
         ]
-        for p in deny_system:
-            lines.append(f"(deny file-write* (subpath {_sbpl_quote(p)}))")
+        lines.extend(f"(deny file-write* (subpath {_sbpl_quote(p)}))" for p in deny_system)
 
         lines.append("")
         lines.append(";; --- Block writes to user credentials & private comms -------")
-        for p in deny_secrets:
-            lines.append(f"(deny file-write* (subpath {_sbpl_quote(p)}))")
+        lines.extend(f"(deny file-write* (subpath {_sbpl_quote(p)}))" for p in deny_secrets)
 
         lines.append("")
         lines.append(";; --- Re-allow writes the agent legitimately needs -----------")
         lines.append(";; (these override the broader denies above for paths inside them)")
-        for lit in rw_lit:
-            lines.append(f"(allow file-write* (literal {_sbpl_quote(lit)}))")
-        for p in rw_subpaths:
-            lines.append(f"(allow file-write* (subpath {_sbpl_quote(p)}))")
+        lines.extend(f"(allow file-write* (literal {_sbpl_quote(lit)}))" for lit in rw_lit)
+        lines.extend(f"(allow file-write* (subpath {_sbpl_quote(p)}))" for p in rw_subpaths)
 
         return "\n".join(lines) + "\n"
 
@@ -365,7 +369,7 @@ class SeatbeltSandbox(Sandbox):
 
     # --- main entry ----------------------------------------------------------
 
-    def execute(self, spec: ExecutionSpec) -> bool:
+    def execute(self, spec: ExecutionSpec) -> bool:  # noqa: PLR0915 - sequential profile assembly, splitting it would obscure the isolation logic
         """Generate a Seatbelt profile, then run the agent under sandbox-exec."""
         host_home = Path.home().resolve()
 
@@ -402,6 +406,7 @@ class SeatbeltSandbox(Sandbox):
             active_venv_path=spec.active_venv_path,
             odoo_filestore=spec.odoo_filestore,
             primary_dirs=spec.primary_dirs,
+            mcp_servers=spec.mcp_servers,
         ):
             self._terminate_pg(spec.pg_process)
             self._cleanup_paths([spec.playground, spec.sandbox_tmp, spec.proxy_dir, spec.pg_data_dir])
@@ -426,7 +431,7 @@ class SeatbeltSandbox(Sandbox):
         # Hand off to odev's bash.run helper, which already sets up a raw TTY
         # the way bwrap does on Linux — interactive TUIs (claude, agy) need
         # that to render correctly.
-        from odev.common import bash
+        from odev.common import bash  # noqa: PLC0415 - deferred, importing it at module level cycles through odev
 
         returncode = 0
         keep_artifacts = False
@@ -436,7 +441,7 @@ class SeatbeltSandbox(Sandbox):
             returncode = error.returncode
         except KeyboardInterrupt:
             returncode = 130
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 - whatever the agent died of, the cleanup below still has to run
             logger.error(f"Failed to run {self.cli}: {e}")
             returncode = 1
 
@@ -453,20 +458,18 @@ class SeatbeltSandbox(Sandbox):
                 f"sandbox-exec -f {shlex.quote(str(profile_path))} "
                 f"/bin/bash {shlex.quote(str(launcher))} {shlex.quote(str(spec.agent_cmd[0])) if spec.agent_cmd else ''}"
             )
-            if returncode == 134:
+            if returncode == SIGABRT_EXIT_CODE:
                 console.print(
-                    "[yellow]Exit 134 (SIGABRT) typically indicates the Seatbelt profile is too "
+                    f"[yellow]Exit {SIGABRT_EXIT_CODE} (SIGABRT) typically indicates the Seatbelt profile is too "
                     "strict for the dynamic linker. Try expanding the read-only allowlist.[/]"
                 )
 
         # Best-effort: ensure secrets file is gone even if launcher didn't run.
         if secrets_file is not None:
-            try:
-                secrets_file.unlink()
-            except FileNotFoundError:
-                pass
-            except Exception:
-                pass
+            # The launcher unlinks it too, and a failure here must not mask the exit code
+            # the agent came back with.
+            with contextlib.suppress(OSError):
+                secrets_file.unlink(missing_ok=True)
         self._terminate_pg(spec.pg_process)
         if keep_artifacts:
             # Drop everything except sandbox_tmp (where profile/launcher live).
