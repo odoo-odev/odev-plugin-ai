@@ -16,16 +16,25 @@ from datetime import datetime
 from pathlib import Path
 
 from odev.common import args
-from odev.common.console import console
+from odev.common.console import TableHeader, console
 from odev.common.databases.local import LocalDatabase
 from odev.common.errors import CommandError
 from odev.common.logging import logging
 
 from odev.plugins.odev_plugin_ai.common.agent import AgentCLI
+from odev.plugins.odev_plugin_ai.common.handlers import get_agent_handler
 from odev.plugins.odev_plugin_ai.common.sandbox import get_sandbox_class
 
 
 logger = logging.getLogger(__name__)
+
+DEFAULT_AI_SESSION_LIMIT = 15
+"""How many sessions ``odev ai --sessions`` lists when no count is given.
+
+Kept to the most recent by the store's own ordering: a developer reopening a session
+means one they were just in, and a table longer than a screen is one they scroll past
+rather than read. Raised for a given run by passing a number to ``--sessions``.
+"""
 
 SKILLS_REPO = "odoo-ps/ps-ai-skills"
 GUIDELINES_SKILL = "odoo_coding_guidelines"
@@ -265,6 +274,9 @@ class AICommandMixin:
             yolo=self.args.yolo,
             headless=self.args.headless,
             edit=self.args.edit,
+            # The command asking for the agent is the one the session is filed under: this
+            # is the single place every command (ai, scaffold, analyze, ...) builds one.
+            source=self._name,
         )
 
     def _database_has_demo(self, database_obj) -> bool:
@@ -609,9 +621,15 @@ class AICommandMixin:
         ephemeral_pg: bool = True,
         extra_ro_bind_dirs: list[str] | None = None,
         mcp_servers: dict | None = None,
+        cwd: str | None = None,
     ) -> bool:
-        """Helper to run the AI agent with common Odoo-related sandbox paths."""
-        sandbox_dirs = self._get_sandbox_dirs(database)
+        """Helper to run the AI agent with common Odoo-related sandbox paths.
+
+        ``cwd`` pins the working directory the sandbox is built around. Sessions are
+        per-directory, so reopening one - as ``--sessions`` does - has to start where it was
+        held for the agent to find it again; left unset, the current directory is used.
+        """
+        sandbox_dirs = self._get_sandbox_dirs(database, cwd=Path(cwd) if cwd else None)
 
         if database:
             should_clone = self._ensure_database_safety(database)
@@ -632,3 +650,129 @@ class AICommandMixin:
             resume=self.args.resume,
             ephemeral_pg=ephemeral_pg,
         )
+
+    # --- Session history (`odev ai --sessions`) ---------------------------------------
+
+    def show_ai_sessions(self, limit: int = DEFAULT_AI_SESSION_LIMIT) -> None:
+        """List the last AI sessions started through odev and reopen one by id.
+
+        The index only holds odev-launched sessions, grouped by the command that started
+        them - a ``claude`` run started by hand is not in it. Titles and token counts are
+        read back from each agent's own transcript here, so they are always current.
+
+        Only the ``limit`` most recently used sessions are shown; the caller sets how
+        many. To reopen one, the developer types the id printed in the table's first
+        column - a plain number, stable for the length of the listing.
+        """
+        from odev.plugins.odev_plugin_ai.common.sessions import SessionStore  # noqa: PLC0415
+
+        # list() is most-recent-first, so the head is the last `limit` sessions used.
+        sessions = self._enrich_ai_sessions(SessionStore().list()[:limit])
+        if not sessions:
+            logger.info("No AI session started through odev has been recorded yet.")
+            return
+
+        # Grouped by the command that started them; the sort is stable, so each group
+        # keeps its own most-recent-first order - which is also the order the ids run in.
+        sessions.sort(key=lambda session: session.get("source", ""))
+
+        self._render_ai_sessions(sessions)
+
+        if self.args.headless or self.console.bypass_prompt:
+            return
+
+        chosen = (self.console.input("Type the id of the session to reopen (leave empty to cancel):") or "").strip()
+        if not chosen:
+            return
+
+        if not chosen.isdigit() or int(chosen) >= len(sessions):
+            logger.warning(f"{chosen!r} is not one of the ids listed above; nothing was reopened.")
+            return
+
+        session = sessions[int(chosen)]
+        # Reopen through the resume path already wired up, in the directory it was held in.
+        self.args.cli = session["cli"]
+        self.args.resume = session["id"]
+        logger.info(f"Reopening the {session['cli']} session started by 'odev {session['source']}'.")
+        self.run_ai_agent(prompt="", cwd=session.get("cwd"))
+
+    def _enrich_ai_sessions(self, records: list[dict]) -> list[dict]:
+        """Decorate each recorded session with the title and token counts of its transcript."""
+        host_home = Path.home().resolve()
+        handlers: dict[str, object] = {}
+        enriched: list[dict] = []
+
+        for record in records:
+            cli = record.get("cli", "")
+            if cli not in handlers:
+                try:
+                    handlers[cli] = get_agent_handler(cli, host_home, self.odev) if cli else None
+                except Exception as error:  # noqa: BLE001 - an unknown CLI just means no extra detail
+                    logger.debug(f"Could not load the {cli!r} handler for session info: {error}")
+                    handlers[cli] = None
+
+            info = {}
+            handler = handlers[cli]
+            if handler is not None:
+                try:
+                    info = handler.get_session_info(record.get("id"), record.get("cwd")) or {}
+                except Exception as error:  # noqa: BLE001 - a missing transcript is not fatal to the listing
+                    logger.debug(f"Could not read session info for {record.get('id')!r}: {error}")
+
+            enriched.append({**record, **info})
+
+        return enriched
+
+    def _render_ai_sessions(self, sessions: list[dict]) -> None:
+        """Print the recorded sessions as a table, grouped by the command that started them."""
+        headers = [
+            TableHeader(title="Id", align="right"),
+            TableHeader(title="Source", align="left"),
+            TableHeader(title="Title", align="left"),
+            TableHeader(title="CLI", align="left"),
+            TableHeader(title="Directory", align="left"),
+            TableHeader(title="Tok. in", align="right"),
+            TableHeader(title="Tok. out", align="right"),
+            TableHeader(title="Last used", align="left"),
+        ]
+        rows = []
+        for index, session in enumerate(sessions):
+            rows.append(
+                [
+                    str(index),
+                    session.get("source", ""),
+                    self._ai_session_title(session),
+                    session.get("cli", ""),
+                    self._short_path(session.get("cwd")),
+                    self._format_tokens(session.get("tokens_in")),
+                    self._format_tokens(session.get("tokens_out")),
+                    session.get("updated_at", ""),
+                ]
+            )
+        # Rendered in the order the caller settled on, so the printed id of a row is its
+        # index in that same list - what the developer types back to reopen it.
+        self.table(headers, rows, title="AI sessions")
+
+    @staticmethod
+    def _ai_session_title(session: dict) -> str:
+        """Return the best one-line description a session offers."""
+        return session.get("title") or session.get("last_prompt") or session.get("id", "")
+
+    @staticmethod
+    def _short_path(path: str | None) -> str:
+        """Return a path with the home directory folded to ``~`` for a narrower column."""
+        if not path:
+            return ""
+        home = str(Path.home())
+        return path.replace(home, "~", 1) if path.startswith(home) else path
+
+    @staticmethod
+    def _format_tokens(count: int | None) -> str:
+        """Return a compact human-readable token count (e.g. 12.3k, 4.1M)."""
+        if not count:
+            return "0"
+        if count >= 1_000_000:
+            return f"{count / 1_000_000:.1f}M"
+        if count >= 1_000:
+            return f"{count / 1_000:.1f}k"
+        return str(count)

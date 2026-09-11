@@ -15,6 +15,16 @@ class OpenCodeHandler(ClaudeHandler):
         """
         return
 
+    def _find_session_transcript(self, session_id, cwd=None):
+        """Return None: opencode's transcripts are not in Claude's project store.
+
+        Same reason as :meth:`get_latest_session_id` - the Claude layout is inherited but
+        not its session store, so the inherited lookup would read the wrong agent's
+        transcripts. Until opencode's own store is wired up, its sessions list in
+        ``odev ai --sessions`` without a title or token counts.
+        """
+        return None
+
     def get_command(self, prompt, resume, all_candidate_paths, model, headless, yolo, mcp_server_names=()):  # noqa: PLR0913 - signature set by BaseAgentHandler
         opencode_bin = self.host_home / ".opencode/bin/opencode"
         if not opencode_bin.exists():
