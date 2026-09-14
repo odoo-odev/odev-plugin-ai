@@ -152,6 +152,63 @@ class ClaudeHandler(BaseAgentHandler):
         logger.info(f"Resuming the last session of {self._session_cwd(latest) or latest.parent.name}.")
         return latest.stem
 
+    def _find_session_transcript(self, session_id, cwd=None):
+        """Return the Claude Code transcript for ``session_id``, across every project dir.
+
+        Looked up by id rather than under ``cwd``: the id is unique, and a session
+        recorded from one directory should still be found if its transcript now lives
+        under another. See :meth:`BaseAgentHandler.get_session_info`.
+        """
+        matches = list((self.host_home / PROJECTS_DIR).glob(f"*/{session_id}.jsonl"))
+        return matches[0] if matches else None
+
+    def _parse_session_transcript(self, transcript):
+        """Read the title and token counts out of a Claude Code transcript.
+
+        The transcript carries everything the listing needs: an ``ai-title`` entry Claude
+        Code writes for the conversation, the ``last-prompt`` as a fallback description,
+        and a ``usage`` block on each assistant message. Input and output are summed apart -
+        the input total folds in prompt-cache reads, which run into the tens of millions and
+        say nothing about what the session itself produced.
+        """
+        title = last_prompt = model = None
+        tokens_in = tokens_out = 0
+
+        with transcript.open() as lines:
+            for line in lines:
+                try:
+                    entry = json.loads(line)
+                except ValueError:
+                    continue
+
+                entry_type = entry.get("type")
+                if entry_type == "ai-title":
+                    title = entry.get("aiTitle") or title
+                elif entry_type == "last-prompt":
+                    last_prompt = entry.get("lastPrompt") or last_prompt
+
+                message = entry.get("message")
+                if isinstance(message, dict):
+                    # "<synthetic>" tags a message the CLI wrote itself (a cancel, an
+                    # error), not the model that ran the turn.
+                    if message.get("model") and message["model"] != "<synthetic>":
+                        model = message["model"]
+                    usage = message.get("usage") or {}
+                    tokens_in += (
+                        usage.get("input_tokens", 0)
+                        + usage.get("cache_read_input_tokens", 0)
+                        + usage.get("cache_creation_input_tokens", 0)
+                    )
+                    tokens_out += usage.get("output_tokens", 0)
+
+        return {
+            "title": title,
+            "last_prompt": last_prompt,
+            "tokens_in": tokens_in,
+            "tokens_out": tokens_out,
+            "model": model,
+        }
+
     @staticmethod
     def _project_slug(path) -> str:
         """Return a path, or the name of a project directory, in comparable form."""

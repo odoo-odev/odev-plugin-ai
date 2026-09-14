@@ -32,6 +32,7 @@ class AgentCLI(OdevFrameworkMixin):
         yolo: bool = False,
         headless: bool = False,
         edit: bool = False,
+        source: str = "ai",
     ):
         super().__init__()
         host_home = Path.home().resolve()
@@ -43,6 +44,9 @@ class AgentCLI(OdevFrameworkMixin):
         self.headless = headless
         self.yolo = yolo or headless
         self.edit = edit and not headless
+        # The odev command that launched this agent (ai, scaffold, analyze, ...), kept so
+        # the session can be filed under it in the index `odev ai --sessions` reads.
+        self.source = source
 
         if edit and headless:
             # Nothing to open an editor on, and nobody to close it: --headless exists to
@@ -287,7 +291,32 @@ class AgentCLI(OdevFrameworkMixin):
             mcp_servers=mcp_servers,
         )
 
-        return self.sandbox.execute(spec)
+        success = self.sandbox.execute(spec)
+        self._record_session(resume, cwd)
+        return success
+
+    def _record_session(self, resume: str | None, cwd: str | None) -> None:
+        """Record the session this run used, so ``odev ai --sessions`` can list it later.
+
+        For a resumed run the id is already known; for a fresh one the agent coins its own
+        id, so the session is the newest one held in the working directory once the run is
+        over - the very lookup ``--resume latest`` relies on. Recording must never break a
+        run, so any failure here is swallowed to a debug line.
+        """
+        try:
+            if resume and resume != "latest":
+                session_id = resume
+            else:
+                session_id = self.get_latest_session_id(cwd)
+
+            if not session_id:
+                return
+
+            from .sessions import SessionStore  # noqa: PLC0415 - keep the store off the import path of a run
+
+            SessionStore().record(session_id, cli=self.cli, source=self.source, cwd=cwd)
+        except Exception as error:  # noqa: BLE001 - a failed recording is never worth losing a run over
+            logger.debug(f"Could not record the AI session: {error}")
 
     @staticmethod
     def _environment_note(database: str | None) -> str:

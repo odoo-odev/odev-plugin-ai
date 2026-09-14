@@ -6,7 +6,7 @@ from odev.common import args
 from odev.common.commands import DatabaseCommand
 from odev.common.logging import logging
 
-from odev.plugins.odev_plugin_ai.common.mixins import AICommandMixin
+from odev.plugins.odev_plugin_ai.common.mixins import DEFAULT_AI_SESSION_LIMIT, AICommandMixin
 
 
 logger = logging.getLogger(__name__)
@@ -36,6 +36,18 @@ class AICommand(DatabaseCommand, AICommandMixin):
         nargs="*",
     )
 
+    sessions = args.String(
+        aliases=["-s", "--sessions"],
+        description="List the AI sessions started through odev (most recent first) and reopen one by id, "
+        f"instead of running a prompt. Lists `ai.session_limit` ({DEFAULT_AI_SESSION_LIMIT} by default, change it "
+        "with `odev config`); pass a number to override it for this run.",
+        # Optional value: `--sessions` on its own lists the default count, `--sessions 30`
+        # lists thirty. Absent, it stays None - the run is a normal prompt, not a listing.
+        nargs="?",
+        const="",
+        default=None,
+    )
+
     def infer_database_instance(self):
         try:
             return super().infer_database_instance()
@@ -47,7 +59,26 @@ class AICommand(DatabaseCommand, AICommandMixin):
 
             return DummyDatabase()
 
+    def _resolve_sessions_limit(self, value: str) -> int:
+        """Return how many sessions ``--sessions`` lists: the number passed, or the config default.
+
+        ``--sessions`` on its own arrives as an empty string, and a value that is not a
+        positive number is a typo worth ignoring rather than a count - both fall back to
+        the configured ``ai.session_limit`` instead of failing the listing over an argument.
+        """
+        try:
+            count = int(value)
+        except (TypeError, ValueError):
+            return self.config.ai.session_limit
+        return count if count > 0 else self.config.ai.session_limit
+
     def run(self) -> None:
+        # --sessions lists past sessions and reopens one; it never starts a fresh prompt,
+        # so it short-circuits before any prompt/database recovery below.
+        if self.args.sessions is not None:
+            self.show_ai_sessions(limit=self._resolve_sessions_limit(self.args.sessions))
+            return
+
         # If database was provided but doesn't exist, we assume it's the start of the prompt
         # This allows 'odev ai "some prompt"' to work even though argparse puts "some prompt" in 'database'
         database_name = self.database_name

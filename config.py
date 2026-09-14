@@ -36,6 +36,22 @@ class AiSection(Section):
         """Set the favorite model specifically for the given CLI agent."""
         self.set(f"favorite_model_{cli}", model)
 
+    @property
+    def session_limit(self) -> int:
+        """How many past AI sessions ``odev ai --sessions`` lists when given no count.
+
+        A positive integer, changed with ``odev config ai.session_limit <n>``. Defaults
+        to 15 (mirrors ``DEFAULT_AI_SESSION_LIMIT`` in the command mixin).
+        """
+        return int(self.get("session_limit", "15"))
+
+    @session_limit.setter
+    def session_limit(self, value: str | int):
+        if not str(value).isdigit() or int(value) <= 0:
+            raise ValueError(f"'ai.session_limit' must be a positive integer, got {value!r}")
+
+        self.set("session_limit", str(value))
+
 
 class SkillsSection(Section):
     _name = "skills"

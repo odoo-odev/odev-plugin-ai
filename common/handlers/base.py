@@ -89,6 +89,62 @@ class BaseAgentHandler:
         """
         return
 
+    def get_session_info(self, session_id, cwd=None):
+        """Return title and token details for a session, or None if this agent keeps none.
+
+        Read from the agent's own transcript rather than stored by odev, so the numbers
+        are whatever the last run left behind and are never counted twice. The default is
+        None: an agent whose store odev cannot read still lists in ``odev ai --sessions`` - it
+        just shows no title or token counts.
+
+        This method is CLI-agnostic on purpose: it locates the transcript and stamps its
+        mtime, and leaves the two agent-specific steps to overrides -
+        :meth:`_find_session_transcript` (where this agent keeps the transcript of an id)
+        and :meth:`_parse_session_transcript` (how to read a title and token counts out of
+        it). A new CLI is added by overriding those two, not by rewriting this.
+
+        The shape, when returned: ``{"title", "last_prompt", "tokens_in", "tokens_out",
+        "model", "mtime"}``. Input and output tokens are kept apart on purpose - the input
+        side is dominated by prompt-cache reads, and folding the two together would read as
+        a spend far larger than the run's own.
+        """
+        if not session_id:
+            return None
+
+        try:
+            transcript = self._find_session_transcript(session_id, cwd)
+            if transcript is None:
+                return None
+
+            info = self._parse_session_transcript(transcript)
+            if info is None:
+                return None
+
+            info.setdefault("mtime", transcript.stat().st_mtime)
+            return info
+        except OSError as error:
+            logger.debug(f"Could not read session info for {session_id!r} on {self.cli!r}: {error}")
+            return None
+
+    def _find_session_transcript(self, session_id, cwd=None):
+        """Return the path of the transcript that holds ``session_id``, or None.
+
+        Default None: this agent's store is not one odev knows how to locate, so its
+        sessions list without a title or token counts. Override per CLI - the id is
+        unique, so a lookup by id is enough and ``cwd`` is only a hint.
+        """
+        return None
+
+    def _parse_session_transcript(self, transcript):
+        """Return the title and token counts read out of ``transcript``, or None.
+
+        Only ever called with a path :meth:`_find_session_transcript` returned. Returns a
+        dict shaped like :meth:`get_session_info` (``mtime`` excluded - the base stamps
+        it). Override per CLI alongside :meth:`_find_session_transcript`; ``OSError`` may
+        be raised freely, the base turns it into a debug line and a ``None``.
+        """
+        return None
+
     def get_command(self, prompt, resume, all_candidate_paths, model, headless, yolo, mcp_server_names=()):  # noqa: PLR0913 - every agent needs the full invocation context
         """Build the command line for the agent."""
         raise NotImplementedError
