@@ -653,7 +653,7 @@ class AICommandMixin:
 
     # --- Session history (`odev ai --sessions`) ---------------------------------------
 
-    def show_ai_sessions(self, limit: int = DEFAULT_AI_SESSION_LIMIT) -> None:
+    def show_ai_sessions(self, limit: int | None = None) -> None:
         """List the last AI sessions started through odev and reopen one by id.
 
         The index only holds odev-launched sessions, grouped by the command that started
@@ -661,10 +661,14 @@ class AICommandMixin:
         read back from each agent's own transcript here, so they are always current.
 
         Only the ``limit`` most recently used sessions are shown; the caller sets how
-        many. To reopen one, the developer types the id printed in the table's first
-        column - a plain number, stable for the length of the listing.
+        many, defaulting to the configured ``ai.session_limit`` when left unset. To reopen
+        one, the developer types the id printed in the table's first column - a plain
+        number, stable for the length of the listing.
         """
         from odev.plugins.odev_plugin_ai.common.sessions import SessionStore  # noqa: PLC0415
+
+        if limit is None:
+            limit = self.config.ai.session_limit
 
         # list() is most-recent-first, so the head is the last `limit` sessions used.
         sessions = self._enrich_ai_sessions(SessionStore().list()[:limit])

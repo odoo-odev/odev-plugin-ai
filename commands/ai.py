@@ -39,7 +39,8 @@ class AICommand(DatabaseCommand, AICommandMixin):
     sessions = args.String(
         aliases=["-s", "--sessions"],
         description="List the AI sessions started through odev (most recent first) and reopen one by id, "
-        f"instead of running a prompt. Lists {DEFAULT_AI_SESSION_LIMIT} by default; pass a number to change it.",
+        f"instead of running a prompt. Lists `ai.session_limit` ({DEFAULT_AI_SESSION_LIMIT} by default, change it "
+        "with `odev config`); pass a number to override it for this run.",
         # Optional value: `--sessions` on its own lists the default count, `--sessions 30`
         # lists thirty. Absent, it stays None - the run is a normal prompt, not a listing.
         nargs="?",
@@ -58,19 +59,18 @@ class AICommand(DatabaseCommand, AICommandMixin):
 
             return DummyDatabase()
 
-    @staticmethod
-    def _resolve_sessions_limit(value: str) -> int:
-        """Return how many sessions ``--sessions`` lists: the number passed, or the default.
+    def _resolve_sessions_limit(self, value: str) -> int:
+        """Return how many sessions ``--sessions`` lists: the number passed, or the config default.
 
         ``--sessions`` on its own arrives as an empty string, and a value that is not a
         positive number is a typo worth ignoring rather than a count - both fall back to
-        the default instead of failing the listing over an argument.
+        the configured ``ai.session_limit`` instead of failing the listing over an argument.
         """
         try:
             count = int(value)
         except (TypeError, ValueError):
-            return DEFAULT_AI_SESSION_LIMIT
-        return count if count > 0 else DEFAULT_AI_SESSION_LIMIT
+            return self.config.ai.session_limit
+        return count if count > 0 else self.config.ai.session_limit
 
     def run(self) -> None:
         # --sessions lists past sessions and reopens one; it never starts a fresh prompt,
