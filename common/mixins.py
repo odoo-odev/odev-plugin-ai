@@ -20,6 +20,7 @@ from odev.common.console import console
 from odev.common.databases.local import LocalDatabase
 from odev.common.errors import CommandError
 from odev.common.logging import logging
+from odev.common.version import OdooVersion
 
 from odev.plugins.odev_plugin_ai.common.agent import AgentCLI
 from odev.plugins.odev_plugin_ai.common.sandbox import get_sandbox_class
@@ -135,6 +136,15 @@ class AICommandMixin:
         aliases=["-d", "--dirs"],
         description="Comma-separated list of extra directories to include in the sandbox (read-write).",
         default=[],
+    )
+
+    version = args.String(
+        aliases=["-V", "--version"],
+        description="""Launch the AI agent in the worktree directory of a specific Odoo version
+        (e.g. 17.0, saas-17.2, master) instead of a database's linked repository. The worktree is
+        created and updated automatically if needed. Takes precedence over a database's repository
+        path if both a database and a version are given.""",
+        default=None,
     )
 
     def _ensure_sandbox_supported(self) -> None:
@@ -349,7 +359,9 @@ class AICommandMixin:
             available[version] = worktree_path.exists()
         return available
 
-    def _get_sandbox_dirs(self, database_name: str | None = None, cwd: Path | None = None) -> list[str]:
+    def _get_sandbox_dirs(
+        self, database_name: str | None = None, version: str | None = None, cwd: Path | None = None
+    ) -> list[str]:
         """Return the directories of the sandbox, resolving them once per run.
 
         Cached because a command asks for them more than once - where to write the
@@ -363,26 +375,37 @@ class AICommandMixin:
         disagree silently, by missing the cache.
         """
         cache = self.__dict__.setdefault("_sandbox_dirs_cache", {})
-        key = (database_name, str(cwd) if cwd is not None else None, self.sandbox_repository)
+        key = (database_name, version, str(cwd) if cwd is not None else None, self.sandbox_repository)
 
         if key not in cache:
-            cache[key] = self._resolve_sandbox_dirs(database_name, cwd)
+            cache[key] = self._resolve_sandbox_dirs(database_name, version, cwd)
 
         return cache[key]
 
-    def _resolve_sandbox_dirs(self, database_name: str | None = None, cwd: Path | None = None) -> list[str]:
+    def _resolve_sandbox_dirs(
+        self, database_name: str | None = None, version: str | None = None, cwd: Path | None = None
+    ) -> list[str]:
         """Work out the list of directories to include in the sandbox.
 
         The first directory in the list is the working directory of the agent, in
         decreasing order of how much it says about the task:
 
-        1. the addons paths of a local database, which are the checkouts it runs on;
-        2. :attr:`sandbox_repository`, the checkout of the code the run is about, which
+        1. the worktree of the Odoo version passed to ``-V``, which the developer named
+           explicitly and so outranks anything inferred from a database;
+        2. the addons paths of a local database, which are the checkouts it runs on;
+        3. :attr:`sandbox_repository`, the checkout of the code the run is about, which
            a command resolved for itself - the only code a hosted database can offer,
            running nowhere local;
-        3. the directory the command was called from, when it is inside a repository;
-        4. the playground, which exposes no personal folder to the agent.
+        4. the directory the command was called from, when it is inside a repository;
+        5. the playground, which exposes no personal folder to the agent.
         """
+        if version:
+            normalized_version = str(OdooVersion(version))
+            available = self._prepare_odoo_environment([normalized_version])
+            if available.get(normalized_version):
+                return [str((self.odev.worktrees_path / normalized_version).resolve())]
+            logger.warning(f"Could not prepare a worktree for Odoo {normalized_version}, falling back.")
+
         if database_name:
             db = LocalDatabase(database_name)
             if db.exists and db.process:
@@ -602,16 +625,17 @@ class AICommandMixin:
         elif missing:
             logger.info(f"Loaded skill(s): {', '.join(missing)}")
 
-    def run_ai_agent(
+    def run_ai_agent(  # noqa: PLR0913 - carries the full context of one agent run
         self,
         prompt: str,
         database: str | None = None,
+        version: str | None = None,
         ephemeral_pg: bool = True,
         extra_ro_bind_dirs: list[str] | None = None,
         mcp_servers: dict | None = None,
     ) -> bool:
         """Helper to run the AI agent with common Odoo-related sandbox paths."""
-        sandbox_dirs = self._get_sandbox_dirs(database)
+        sandbox_dirs = self._get_sandbox_dirs(database, version or self.args.version)
 
         if database:
             should_clone = self._ensure_database_safety(database)
