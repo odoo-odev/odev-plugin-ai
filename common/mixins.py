@@ -504,14 +504,24 @@ class AICommandMixin:
         release = self.config.update.release
         return f"{SKILLS_REPO}#{release}" if release in ("main", "beta") else SKILLS_REPO
 
+    @staticmethod
+    def _skill_arguments(skills: list[str]) -> list[str]:
+        """Return the arguments naming the given skills to the skills CLI.
+
+        One ``--skill`` per name: the option takes a single skill, and a comma-joined
+        list is read as one name matching nothing - the CLI then refuses the whole call
+        with "No matching skills found", which is how every run missing more than one
+        skill installed none of them. Singular too: ``--skills`` is not an option the
+        CLI knows, and an unknown option is ignored rather than refused, which quietly
+        installed every skill of the repository on every call.
+        """
+        return [argument for skill in skills for argument in ("--skill", skill)]
+
     def _install_skills(self, skills: list[str]) -> list[str]:
         """Install skills globally from the PS skills repo, return those still missing."""
         package = self._skills_package()
         logger.info(f"Loading missing skill(s) from {package}: {', '.join(skills)}...")
-        # --skill, singular: --skills is not an option the CLI knows, and an unknown
-        # option is ignored rather than refused, which quietly installed every skill of
-        # the repository on every call instead of the one that was missing.
-        result = self._run_skills_cli("add", package, "--skill", ",".join(skills), "-g")
+        result = self._run_skills_cli("add", package, *self._skill_arguments(skills), "-g")
         if result is None:
             return skills
 
@@ -519,8 +529,8 @@ class AICommandMixin:
         # (e.g. agents that do not support global installs), so the only reliable
         # check is to ask for the list again.
         still_missing = [s for s in skills if s not in self._get_loaded_skills()]
-        if still_missing:
-            logger.debug(f"skills add output:\n{result.stdout or result.stderr}")
+        if still_missing or result.returncode:
+            logger.debug(f"skills add exited with {result.returncode}:\n{result.stdout or result.stderr}")
         return still_missing
 
     def _refresh_skills(self, skills: list[str]) -> None:
@@ -620,7 +630,8 @@ class AICommandMixin:
             logger.warning(
                 f"The following skill(s) are missing: {', '.join(still_missing)}. "
                 "For a better experience, you can load them by running:\n"
-                f"npx -y skills add {self._skills_package()} --skill {','.join(still_missing)} -g"
+                f"npx -y skills add {self._skills_package()} "
+                f"{' '.join(self._skill_arguments(still_missing))} -g"
             )
         elif missing:
             logger.info(f"Loaded skill(s): {', '.join(missing)}")
