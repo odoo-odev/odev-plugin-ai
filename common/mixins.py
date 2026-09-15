@@ -759,8 +759,18 @@ class AICommandMixin:
 
     @staticmethod
     def _ai_session_title(session: dict) -> str:
-        """Return the best one-line description a session offers."""
-        return session.get("title") or session.get("last_prompt") or session.get("id", "")
+        """Return the best one-line description a session offers.
+
+        The most recent ``summary`` recap wins when there is one: it accounts for
+        where the session stands, not just what it was first about, which the ``title``
+        and the ``last_prompt`` fall back to.
+        """
+        return (
+            session.get("summary")
+            or session.get("title")
+            or session.get("last_prompt")
+            or session.get("id", "")
+        )
 
     @staticmethod
     def _short_path(path: str | None) -> str:

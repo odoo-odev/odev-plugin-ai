@@ -34,6 +34,13 @@ an older one keeps underscores where a newer one dashes them - so a name built h
 compared against names that were built by something else.
 """
 
+RECAP_HINT = re.compile(r"\s*\(disable recaps in /config\)\s*$")
+"""The nudge Claude Code appends to every away-recap, stripped off before it is a title.
+
+Boilerplate that says nothing about the session; carried in the ``content`` of every
+``away_summary`` entry and only noise once the summary is a one-line description.
+"""
+
 
 class ClaudeHandler(BaseAgentHandler):
     def get_config_dirs(self):
@@ -165,13 +172,21 @@ class ClaudeHandler(BaseAgentHandler):
     def _parse_session_transcript(self, transcript):
         """Read the title and token counts out of a Claude Code transcript.
 
-        The transcript carries everything the listing needs: an ``ai-title`` entry Claude
-        Code writes for the conversation, the ``last-prompt`` as a fallback description,
-        and a ``usage`` block on each assistant message. Input and output are summed apart -
-        the input total folds in prompt-cache reads, which run into the tens of millions and
-        say nothing about what the session itself produced.
+        The transcript carries everything the listing needs: the ``away_summary`` recaps
+        Claude Code writes when a session is left idle - the most recent of which is the
+        best one-line account of where the session stands - an ``ai-title`` entry for the
+        conversation, the ``last-prompt`` as a further fallback, and a ``usage`` block on
+        each assistant message. Input and output are summed apart - the input total folds
+        in prompt-cache reads, which run into the tens of millions and say nothing about
+        what the session itself produced.
+
+        The away-recaps are picked by their ``timestamp`` rather than by file order: a
+        resumed session interleaves entries from more than one run, so the last recap read
+        is not always the last one written. Timestamps are ISO-8601 in UTC, which sort the
+        same lexicographically as chronologically, so they are compared as plain strings.
         """
         title = last_prompt = model = None
+        away_summary = away_summary_at = None
         tokens_in = tokens_out = 0
 
         with transcript.open() as lines:
@@ -186,6 +201,12 @@ class ClaudeHandler(BaseAgentHandler):
                     title = entry.get("aiTitle") or title
                 elif entry_type == "last-prompt":
                     last_prompt = entry.get("lastPrompt") or last_prompt
+                elif entry_type == "system" and entry.get("subtype") == "away_summary":
+                    content = (entry.get("content") or "").strip()
+                    stamp = entry.get("timestamp") or ""
+                    if content and (away_summary is None or stamp >= away_summary_at):
+                        away_summary = RECAP_HINT.sub("", content)
+                        away_summary_at = stamp
 
                 message = entry.get("message")
                 if isinstance(message, dict):
@@ -203,6 +224,7 @@ class ClaudeHandler(BaseAgentHandler):
 
         return {
             "title": title,
+            "summary": away_summary,
             "last_prompt": last_prompt,
             "tokens_in": tokens_in,
             "tokens_out": tokens_out,
