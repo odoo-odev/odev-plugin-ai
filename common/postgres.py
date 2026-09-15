@@ -278,7 +278,7 @@ class PostgresSandbox(OdevFrameworkMixin):
                     "-d",
                     "postgres",
                     "-c",
-                    f'CREATE DATABASE "{database}";',
+                    f"CREATE DATABASE \"{database}\" ENCODING 'UTF8' TEMPLATE template0;",
                 ],
                 check=True,
                 capture_output=True,
@@ -296,7 +296,17 @@ class PostgresSandbox(OdevFrameworkMixin):
             # Use current host user as superuser so psql works without -U
             user = Path.home().name
             subprocess.run(
-                [self._get_pg_bin("initdb"), "-D", str(data_dir), "--nosync", "-U", user, "--auth=trust"],
+                [
+                    self._get_pg_bin("initdb"),
+                    "-D",
+                    str(data_dir),
+                    "--nosync",
+                    "-U",
+                    user,
+                    "--auth=trust",
+                    "--encoding=UTF8",
+                    "--locale=C",
+                ],
                 check=True,
                 capture_output=True,
             )

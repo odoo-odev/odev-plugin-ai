@@ -11,6 +11,7 @@ import shutil
 import subprocess
 import tempfile
 from pathlib import Path
+from types import SimpleNamespace
 
 from odev.common.browsers import Chrome
 from odev.common.console import console
@@ -36,12 +37,11 @@ def _check_bwrap_support() -> tuple[bool, str]:
     try:
         # Try a minimal bwrap command that requires user namespaces
         subprocess.run(
-            ["bwrap", "--unshare-user", "--version"],
+            ["bwrap", "--unshare-user", "--version"],  # noqa: S607 - found on PATH, /usr/bin or /bin by distro
             capture_output=True,
             check=True,
             timeout=2,
         )
-        return True, ""
     except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError) as e:
         stderr = getattr(e, "stderr", b"").decode()
         if "Permission denied" in stderr or "setting up uid map" in stderr:
@@ -57,6 +57,8 @@ def _check_bwrap_support() -> tuple[bool, str]:
                     "  echo 'kernel.apparmor_restrict_unprivileged_userns = 0' | sudo tee /etc/sysctl.d/60-apparmor-namespace.conf"
                 )
         return False, f"Sandbox initialization failed: {stderr or str(e)}"
+    else:
+        return True, ""
 
 
 class BwrapSandbox(Sandbox):
@@ -124,17 +126,20 @@ class BwrapSandbox(Sandbox):
 
         # Use the Chrome utility to generate a wrapper in the guest /tmp
         try:
-            # Temporarily redirect Chrome.odev.home_path to our sandbox_tmp to generate the wrapper
-            # Chrome.get_wrapper() will create {home_path}/tmp/odoo-chrome-wrapper
-            original_home = self.odev.home_path
-            self.odev.home_path = sandbox_tmp
-            chrome.get_wrapper(chrome_bin=chrome_guest_bin)
-            self.odev.home_path = original_home
+            # `Chrome.get_wrapper` writes to `{odev.home_path}/tmp/odoo-chrome-wrapper`, and the
+            # wrapper this needs points at the *guest* binary - so it cannot be written to the
+            # shared odev home, where it would overwrite the host's own wrapper with a path that
+            # only resolves inside a sandbox. `home_path` is a read-only property on the
+            # framework, so the destination is redirected by handing Chrome an object that
+            # answers `home_path` with the sandbox tmp instead of assigning to the property.
+            # Chrome reads nothing else off it, and provisioning already happened above.
+            sandbox_chrome = Chrome(SimpleNamespace(home_path=sandbox_tmp))
+            sandbox_chrome.get_wrapper(chrome_bin=chrome_guest_bin)
 
             # Point ODOO_BROWSER_BIN at the wrapper inside the guest's /tmp
             # Since sandbox_tmp is bound to /tmp, the file is at /tmp/tmp/odoo-chrome-wrapper
-            cmd.extend(["--setenv", "ODOO_BROWSER_BIN", "/tmp/tmp/odoo-chrome-wrapper"])
-        except Exception as e:
+            cmd.extend(["--setenv", "ODOO_BROWSER_BIN", "/tmp/tmp/odoo-chrome-wrapper"])  # noqa: S108
+        except Exception as e:  # noqa: BLE001 - tours are optional, a missing wrapper is not fatal
             logger.warning(f"Failed to setup Chrome wrapper: {e}")
         self._add_runtime_binds(cmd)
         if not chrome_bound:
@@ -198,11 +203,11 @@ class BwrapSandbox(Sandbox):
                 "/proc",
                 "--bind",
                 str(sandbox_tmp),
-                "/tmp",
+                "/tmp",  # noqa: S108 - the guest's /tmp, bound from sandbox_tmp
             ]
         )
         if "DISPLAY" in os.environ:
-            cmd.extend(["--bind-try", "/tmp/.X11-unix", "/tmp/.X11-unix"])
+            cmd.extend(["--bind-try", "/tmp/.X11-unix", "/tmp/.X11-unix"])  # noqa: S108 - the X socket, as the host has it
         cmd.extend(
             [
                 "--ro-bind-try",
@@ -237,7 +242,7 @@ class BwrapSandbox(Sandbox):
             ]
         )
 
-    def _apply_final_bindings(
+    def _apply_final_bindings(  # noqa: PLR0913 - carries the full bind context, like its siblings
         self,
         cmd: list[str],
         agent_dirs: list[Path],
@@ -258,7 +263,7 @@ class BwrapSandbox(Sandbox):
                     else:
                         dst_in_playground.parent.mkdir(parents=True, exist_ok=True)
                         dst_in_playground.touch(exist_ok=True)
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 - bwrap creates what it can, a missing bind point is its problem
                 logger.debug(f"Could not pre-create destination path for {dst}: {e}")
 
         for d in agent_dirs:
@@ -282,13 +287,13 @@ class BwrapSandbox(Sandbox):
                 "/var/run/postgresql",
                 "--symlink",
                 "/var/run/postgresql/.s.PGSQL.5432",
-                "/tmp/.s.PGSQL.5432",
+                "/tmp/.s.PGSQL.5432",  # noqa: S108 - where libpq looks for the socket, in the guest
             ]
         )
 
     # --- main entry ----------------------------------------------------------
 
-    def execute(self, spec: ExecutionSpec) -> bool:
+    def execute(self, spec: ExecutionSpec) -> bool:  # noqa: PLR0912 - sequential argv assembly, splitting it would obscure the isolation logic
         """Translate the spec into a bwrap argv and execute the agent."""
         host_home = Path.home().resolve()
 
@@ -323,7 +328,7 @@ class BwrapSandbox(Sandbox):
         # Pre-create top-level dirs needed for arbitrary binds (e.g. /opt, /srv)
         top_dirs = {
             "/home",
-            "/tmp",
+            "/tmp",  # noqa: S108 - a bind point to pre-create in the guest, not a file to write
             "/dev",
             "/proc",
             "/sys",
@@ -369,6 +374,7 @@ class BwrapSandbox(Sandbox):
             active_venv_path=spec.active_venv_path,
             odoo_filestore=spec.odoo_filestore,
             primary_dirs=spec.primary_dirs,
+            mcp_servers=spec.mcp_servers,
         ):
             self._terminate_pg(spec.pg_process)
             self._cleanup_paths([spec.playground, spec.sandbox_tmp, spec.proxy_dir, spec.pg_data_dir])
@@ -377,7 +383,7 @@ class BwrapSandbox(Sandbox):
         if not self.headless:
             logger.info(f"Starting Project-wide AI execution ({self.cli})")
 
-        from odev.common import bash
+        from odev.common import bash  # noqa: PLC0415 - deferred, importing it at module level cycles through odev
 
         returncode = 0
         try:
@@ -406,7 +412,7 @@ class BwrapSandbox(Sandbox):
             if not supported:
                 console.print(f"\n[bold red]Error:[/] {message}")
                 returncode = 1
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 - whatever the agent died of, the cleanup below still has to run
             logger.error(f"Failed to run {self.cli}: {e}")
             returncode = 1
         finally:
