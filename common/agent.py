@@ -193,10 +193,12 @@ class AgentCLI(OdevFrameworkMixin):
         PostgresSandbox.cleanup_orphans()
 
         host_home = Path.home().resolve()
-        playground = Path(tempfile.mkdtemp(prefix=f"odev-ai-{self.cli}-"))
-        sandbox_tmp = Path(tempfile.mkdtemp(prefix=f"odev-ai-tmp-{self.cli}-"))
-        proxy_dir = Path(tempfile.mkdtemp(prefix="odev-ai-pg-"))
-        pg_data_dir = Path(tempfile.mkdtemp(prefix="odev-ai-pgdata-"))
+        # The owner pid in each name lets a concurrent run's orphan cleanup spare this live session.
+        owner = f"odev-ai-{os.getpid()}-"
+        playground = Path(tempfile.mkdtemp(prefix=f"{owner}{self.cli}-"))
+        sandbox_tmp = Path(tempfile.mkdtemp(prefix=f"{owner}tmp-{self.cli}-"))
+        proxy_dir = Path(tempfile.mkdtemp(prefix=f"{owner}pg-"))
+        pg_data_dir = Path(tempfile.mkdtemp(prefix=f"{owner}pgdata-"))
 
         sandbox_data = self.sandbox.prepare_sandbox_config(
             sandbox_dirs=sandbox_dirs,
