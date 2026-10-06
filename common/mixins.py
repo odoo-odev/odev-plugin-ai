@@ -20,6 +20,7 @@ from odev.common.console import console
 from odev.common.databases.local import LocalDatabase
 from odev.common.errors import CommandError
 from odev.common.logging import logging
+from odev.common.odoobin import OdoobinProcess
 from odev.common.version import OdooVersion
 
 from odev.plugins.odev_plugin_ai.common.agent import AgentCLI
@@ -382,6 +383,58 @@ class AICommandMixin:
 
         return cache[key]
 
+    @staticmethod
+    def _version_from_cwd(cwd: Path | None = None) -> OdooVersion | None:
+        """Return the Odoo version of the addons in the current directory, if any.
+
+        A developer sitting in a client's checkout is working against the version that
+        checkout is built for, whatever the task's subscription in Ps-Tools happens to
+        name - which can be stale, or point at another database entirely. So the folder
+        is read first, and only when it holds no addon that names a version does the run
+        fall back to the task. ``version_from_addons`` reads the manifests directly below
+        the directory, so this speaks only when it is the root of a checkout.
+        """
+        target = (cwd or Path.cwd()).resolve()
+        try:
+            return OdoobinProcess.version_from_addons(target)
+        except Exception as e:  # noqa: BLE001 - a folder we cannot read is a version we do not have
+            logger.debug(f"Could not read an Odoo version from {target}: {e}")
+            return None
+
+    @staticmethod
+    def _platform_from_cwd(cwd: Path | None = None) -> str | None:
+        """Return the hosting - ``"sh"`` or ``"saas"`` - of the checkout in the current
+        directory, or ``None`` when it is not a checkout this can read.
+
+        The folder tells the two apart by what its modules carry: any Python beyond the
+        ``__init__.py`` and the manifest is custom code, which SaaS does not run - so a
+        checkout holding some is Odoo.sh, and one holding none is SaaS. It outranks the
+        task's subscription in Ps-Tools, which can name the wrong one. It says nothing
+        about on-premise, which from the files alone looks exactly like Odoo.sh, so a run
+        that may be on-premise still asks rather than trusting this.
+        """
+        ignored = {"__init__.py", "__manifest__.py", "__openerp__.py"}
+        target = (cwd or Path.cwd()).resolve()
+        try:
+            # Gate on it being an addons checkout at all, so a stray .py in some unrelated
+            # folder is not read as a hosting.
+            if OdoobinProcess.version_from_addons(target) is None:
+                return None
+
+            modules = [
+                p for p in target.iterdir() if p.is_dir() and OdoobinProcess.check_addon_path(p)
+            ]
+            if not modules:
+                return None
+
+            for module in modules:
+                if any(py.name not in ignored for py in module.rglob("*.py")):
+                    return "sh"
+            return "saas"
+        except OSError as e:
+            logger.debug(f"Could not read a hosting from {target}: {e}")
+            return None
+
     def _resolve_sandbox_dirs(
         self, database_name: str | None = None, version: str | None = None, cwd: Path | None = None
     ) -> list[str]:
@@ -646,7 +699,15 @@ class AICommandMixin:
         mcp_servers: dict | None = None,
     ) -> bool:
         """Helper to run the AI agent with common Odoo-related sandbox paths."""
-        sandbox_dirs = self._get_sandbox_dirs(database, version or self.args.version)
+        explicit_version = version or self.args.version
+        sandbox_dirs = self._get_sandbox_dirs(database, explicit_version)
+
+        # The venv is picked from the version the developer named, then from the checkout
+        # they are standing in - but only when no database is given, whose own version is
+        # the one it runs on. This is kept out of _get_sandbox_dirs on purpose: a version
+        # there builds a worktree and makes it the working directory, which would replace
+        # the current folder rather than just tell the agent which Python to run.
+        venv_version = explicit_version or (self._version_from_cwd() if not database else None)
 
         if database:
             should_clone = self._ensure_database_safety(database)
@@ -664,6 +725,7 @@ class AICommandMixin:
             extra_ro_bind_dirs=extra_ro_bind_dirs,
             mcp_servers=mcp_servers,
             database=database,
+            version=str(venv_version) if venv_version else None,
             resume=self.args.resume,
             ephemeral_pg=ephemeral_pg,
         )
