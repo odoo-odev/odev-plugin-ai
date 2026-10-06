@@ -148,7 +148,13 @@ class AICommandMixin:
     )
 
     def _ensure_sandbox_supported(self) -> None:
-        """Verify that this host can run the AI sandbox; raise otherwise."""
+        """Verify that this host can run the AI sandbox; raise otherwise.
+
+        When the only thing standing in the way is the Ubuntu AppArmor restriction on
+        unprivileged user namespaces, the plugin setup can install a bwrap profile that
+        lifts it. Rather than leave the user to copy shell commands out of the error, we
+        offer to run that setup in place and re-check.
+        """
         try:
             sandbox_cls = get_sandbox_class()
         except RuntimeError as e:
@@ -156,9 +162,41 @@ class AICommandMixin:
             raise CommandError(str(e)) from e
 
         supported, message = sandbox_cls.check_support()
-        if not supported:
+        if supported:
+            return
+
+        console.print(f"\n[bold red]Error:[/] {message}")
+
+        if self._offer_bwrap_setup():
+            supported, message = sandbox_cls.check_support()
+            if supported:
+                return
             console.print(f"\n[bold red]Error:[/] {message}")
-            raise CommandError("AI sandbox backend is not available on this host.")
+
+        raise CommandError("AI sandbox backend is not available on this host.")
+
+    def _offer_bwrap_setup(self) -> bool:
+        """Offer to run the plugin setup to repair a fixable bwrap AppArmor restriction.
+
+        :return: Whether the setup was run (the caller should then re-check support).
+        :rtype: bool
+        """
+        from odev.plugins.odev_plugin_ai import setup as plugin_setup  # noqa: PLC0415 - avoids an import cycle at module load
+
+        # The profile only helps when the AppArmor user-namespace restriction is actually
+        # what is blocking bwrap; for anything else (e.g. bwrap not installed) setup is a no-op.
+        if not plugin_setup._restriction_active() or not shutil.which("bwrap"):
+            return False
+
+        if not console.confirm(
+            "This can be fixed by installing an AppArmor profile for bwrap. "
+            "Run the AI plugin setup now? (you may be prompted for your sudo password)",
+            default=True,
+        ):
+            return False
+
+        plugin_setup.setup(self.odev)
+        return True
 
     @staticmethod
     def _ensure_cli_installed(final_cli: str) -> None:
