@@ -89,7 +89,7 @@ class BaseAgentHandler:
         """
         return
 
-    def get_command(self, prompt, resume, all_candidate_paths, model, headless, yolo, mcp_server_names=()):  # noqa: PLR0913 - every agent needs the full invocation context
+    def get_command(self, prompt, resume, all_candidate_paths, model, headless, yolo, plan=False, mcp_server_names=()):  # noqa: PLR0913 - every agent needs the full invocation context
         """Build the command line for the agent."""
         raise NotImplementedError
 

@@ -15,12 +15,16 @@ class OpenCodeHandler(ClaudeHandler):
         """
         return
 
-    def get_command(self, prompt, resume, all_candidate_paths, model, headless, yolo, mcp_server_names=()):  # noqa: PLR0913 - signature set by BaseAgentHandler
+    def get_command(self, prompt, resume, all_candidate_paths, model, headless, yolo, plan=False, mcp_server_names=()):  # noqa: PLR0913 - signature set by BaseAgentHandler
         opencode_bin = self.host_home / ".opencode/bin/opencode"
         if not opencode_bin.exists():
             logger.error(f"opencode binary not found at {opencode_bin}")
             return []
         cmd = [str(opencode_bin), "run"]
+        # opencode selects plan mode by running its built-in "plan" agent rather than by a
+        # permission flag.
+        if plan:
+            cmd.extend(["--agent", "plan"])
         if prompt:
             cmd.append(prompt)
         if resume:

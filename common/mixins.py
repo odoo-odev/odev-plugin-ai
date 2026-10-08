@@ -105,6 +105,14 @@ class AICommandMixin:
         default=False,
     )
 
+    plan = args.Flag(
+        aliases=["-P", "--plan"],
+        description="Launch the agent in plan mode: it researches the task and proposes a plan for you "
+        "to approve before it changes anything. Interactive only, and the opposite of --yolo. "
+        "Supported by every CLI, each through its own flag.",
+        default=False,
+    )
+
     headless = args.Flag(
         aliases=["-H", "--headless"],
         description="Run the AI agent in non-interactive (headless) mode.",
@@ -275,6 +283,7 @@ class AICommandMixin:
             yolo=self.args.yolo,
             headless=self.args.headless,
             edit=self.args.edit,
+            plan=self.args.plan,
         )
 
     def _database_has_demo(self, database_obj) -> bool:
