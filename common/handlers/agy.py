@@ -70,7 +70,7 @@ class AgyHandler(BaseAgentHandler):
         except OSError as e:
             logger.warning(f"Could not set up the Antigravity skills symlink: {e}")
 
-    def get_command(self, prompt, resume, all_candidate_paths, model, headless, yolo, mcp_server_names=()):  # noqa: PLR0913 - signature set by BaseAgentHandler
+    def get_command(self, prompt, resume, all_candidate_paths, model, headless, yolo, plan=False, mcp_server_names=()):  # noqa: PLR0913 - signature set by BaseAgentHandler
         home = Path.home()
         agy_creds = home / ".antigravity" / "oauth_creds.json"
         gemini_creds = home / ".gemini" / "oauth_creds.json"
@@ -96,7 +96,12 @@ class AgyHandler(BaseAgentHandler):
                 cmd.append("--continue")
             else:
                 cmd.extend(["--conversation", resume])
-        if yolo:
+        # plan and yolo are the opposite answers to the same question and AICommandMixin
+        # never lets both through, so these never fight: plan has Gemini present a plan for
+        # approval, yolo waives approval entirely.
+        if plan:
+            cmd.append("--approval-mode=plan")
+        elif yolo:
             cmd.append("--dangerously-skip-permissions")
         if model and model != "auto":
             cmd.extend(["--model", model])

@@ -179,7 +179,7 @@ class ClaudeHandler(BaseAgentHandler):
 
         return None
 
-    def get_command(self, prompt, resume, all_candidate_paths, model, headless, yolo, mcp_server_names=()):  # noqa: PLR0913 - signature set by BaseAgentHandler
+    def get_command(self, prompt, resume, all_candidate_paths, model, headless, yolo, plan=False, mcp_server_names=()):  # noqa: PLR0913 - signature set by BaseAgentHandler
         cmd = ["claude"]
         if prompt:
             if headless:
@@ -198,7 +198,13 @@ class ClaudeHandler(BaseAgentHandler):
             # allows all of them, so a prompt telling the agent to call an MCP tool does
             # not turn into a permission prompt per tool.
             allowed_tools.extend(f"mcp__{server}" for server in mcp_server_names)
-            cmd.extend(["--permission-mode", "acceptEdits", "--allowedTools", ",".join(allowed_tools)])
+            # Plan mode has Claude research the task and present a plan for approval before
+            # it touches anything; acceptEdits lets it apply edits as it goes. The two are
+            # opposite answers to the same question, so they are the two readings of
+            # --permission-mode here.
+            cmd.extend(
+                ["--permission-mode", "plan" if plan else "acceptEdits", "--allowedTools", ",".join(allowed_tools)]
+            )
         if model and model != "auto":
             cmd.extend(["--model", model])
         for path in self._guest_paths(all_candidate_paths):

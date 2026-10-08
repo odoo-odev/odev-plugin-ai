@@ -32,6 +32,7 @@ class AgentCLI(OdevFrameworkMixin):
         yolo: bool = False,
         headless: bool = False,
         edit: bool = False,
+        plan: bool = False,
     ):
         super().__init__()
         host_home = Path.home().resolve()
@@ -41,13 +42,22 @@ class AgentCLI(OdevFrameworkMixin):
         self.cli = cli
         self.model = model
         self.headless = headless
-        self.yolo = yolo or headless
+        # Plan mode has the agent propose a plan and wait for it to be approved before it
+        # changes anything, so it needs a terminal to ask in - and it is the opposite of
+        # yolo, which approves everything up front. Where the two are asked for together
+        # plan wins: someone passing it is asking to see the work before it lands.
+        self.plan = plan and not headless
+        self.yolo = (yolo and not self.plan) or headless
         self.edit = edit and not headless
 
         if edit and headless:
             # Nothing to open an editor on, and nobody to close it: --headless exists to
             # be run without a terminal in front of it.
             logger.warning("Ignoring --edit: there is no terminal to edit the prompt in when running headless.")
+        if plan and headless:
+            logger.warning("Ignoring --plan: there is no one to approve a plan when running headless.")
+        elif plan and yolo:
+            logger.warning("Ignoring --yolo: --plan waits for its plan to be approved before the agent acts.")
         self.handler = get_agent_handler(cli, host_home, Odev())
         self.sandbox = get_sandbox(
             cli=cli,
@@ -98,6 +108,7 @@ class AgentCLI(OdevFrameworkMixin):
             model=self.model,
             headless=self.headless,
             yolo=self.yolo,
+            plan=self.plan,
             mcp_server_names=mcp_server_names,
         )
 
