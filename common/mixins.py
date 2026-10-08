@@ -406,14 +406,17 @@ class AICommandMixin:
         """Return the hosting - ``"sh"`` or ``"saas"`` - of the checkout in the current
         directory, or ``None`` when it is not a checkout this can read.
 
-        The folder tells the two apart by what its modules carry: any Python beyond the
-        ``__init__.py`` and the manifest is custom code, which SaaS does not run - so a
-        checkout holding some is Odoo.sh, and one holding none is SaaS. It outranks the
+        The folder tells the two apart by what its modules carry: Python that is more
+        than metadata or a packaging script - a model, a controller, a wizard, anything
+        installable - is code SaaS does not run, so a checkout holding some is Odoo.sh and
+        one holding none is SaaS. It outranks the
         task's subscription in Ps-Tools, which can name the wrong one. It says nothing
         about on-premise, which from the files alone looks exactly like Odoo.sh, so a run
         that may be on-premise still asks rather than trusting this.
         """
-        ignored = {"__init__.py", "__manifest__.py", "__openerp__.py"}
+        # Metadata and the packaging/tooling scripts a data-only module can still carry:
+        # present or not, they say nothing about whether the module is installable code.
+        ignored = {"__init__.py", "__manifest__.py", "__openerp__.py", "setup.py", "conftest.py"}
         target = (cwd or Path.cwd()).resolve()
         try:
             # Gate on it being an addons checkout at all, so a stray .py in some unrelated
