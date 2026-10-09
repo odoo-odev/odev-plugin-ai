@@ -142,6 +142,14 @@ class AgentCLI(OdevFrameworkMixin):
             if node_bin_dir not in items:
                 items.append(node_bin_dir)
 
+        # Same for the PostgreSQL client tools odev runs ('psql', 'pg_dump', ...): on macOS they are
+        # not in any of the directories below (Postgres.app, keg-only Homebrew 'postgresql@NN').
+        host_psql = shutil.which("psql")
+        if host_psql:
+            psql_bin_dir = str(Path(host_psql).parent)
+            if psql_bin_dir not in items:
+                items.append(psql_bin_dir)
+
         items.extend(
             [
                 str(host_home / ".npm-global" / "bin"),
