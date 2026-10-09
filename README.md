@@ -42,6 +42,28 @@ following tools must be installed on your host system:
 Configuration is handled automatically when you first install `odev` or enable the AI plugin. You will be prompted to
 select your preferred LLM provider and enter the corresponding API key.
 
+## Skills
+
+The [PS skills](https://github.com/odoo-ps/ps-ai-skills) are installed automatically: the repository is cloned in the
+odev home directory (`skills`) and the skills a command needs are brought into the global skills directory of every
+supported agent you have installed — symlinked for the agents that follow one, copied for the ones that do not
+(Antigravity / `agy`). The clone is refreshed daily. Nothing is downloaded from npm.
+
+```bash
+odev config skills.disabled odoo_upgrade_skill,test_skill  # skip specific skills
+odev config skills.interval 7                              # refresh the skills weekly instead of daily
+```
+
+When a run targets a specific Odoo version — named with `-V` (`odev ai -V 18.0`) or inferred from the database the agent
+works on — the skills shipped with that version's source (`<worktrees>/<version>/odoo/skills`, e.g. `odoo-guidelines`)
+are installed alongside the PS ones, so the agent gets the guidelines of the exact version it works on. They are swapped
+out when another version is selected.
+
+If you previously ran `npx skills add odoo-ps/ps-ai-skills`, its skills are unlinked from your agents the first time one
+runs: they would otherwise shadow the git-managed ones and stay frozen at the version you installed back then. The
+copies themselves are kept in `~/.agents/skills`, so any local edit you made is still there — use `npx skills remove` to
+drop them for good. Skills you installed yourself and skills coming from another repository are never touched.
+
 ## RTK (Rust Token Killer) Integration
 
 `odev` now automatically supports [RTK](https://github.com/rtk-ai/rtk) to compress terminal output and reduce LLM token
