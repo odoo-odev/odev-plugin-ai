@@ -5,6 +5,10 @@ home directory, then the skills a command asks for are brought into the global s
 of every supported AI CLI. Agents that resolve a symlinked skill directory get a symlink, so a
 weekly `git pull` updates them for free; the ones that do not (Antigravity / `agy`) get a copy.
 
+On top of the repository, the skills shipped with the Odoo source of the version the agent runs
+against are installed too: they live under `<worktrees>/<version>/odoo/skills`, change from one
+version to the next, and are picked up from whichever worktree the run selected.
+
 Links left behind by a previous npm installation are removed so skills keep being updated here.
 """
 # ruff: noqa: S101  # the self-check at the bottom of this module is assert-based on purpose
@@ -103,6 +107,31 @@ def _skills_in(skills_root: Path, disabled: set[str]) -> dict[str, Path]:
             skills[name] = path
 
     return skills
+
+
+def _version_skills_root(odev, version: str) -> Path | None:
+    """Return the `skills` directory shipped with the Odoo source of `version`, if present.
+
+    Odoo ships version-specific skills under `<worktrees>/<version>/odoo/skills`. The version is
+    normalized the way the rest of the plugin resolves a worktree, but the raw name is tried too
+    so a worktree created under an exact string is still found.
+    """
+    from odev.common.version import OdooVersion  # noqa: PLC0415
+
+    worktrees = odev.home_path / "worktrees"
+    names = [version]
+
+    try:
+        names.append(str(OdooVersion(version)))
+    except Exception as e:  # noqa: BLE001 - a free-form version is not worth failing a run over
+        logger.debug(f"Could not normalize version {version!r}: {e}")
+
+    for name in dict.fromkeys(names):
+        root = worktrees / name / "odoo" / "skills"
+        if root.is_dir():
+            return root
+
+    return None
 
 
 def prune_npm_install(skills: set[str], home: Path, managed_roots: list[Path]) -> list[str]:
@@ -284,11 +313,12 @@ def _refresh_repository(odev, config):
     return git
 
 
-def ensure_skills(odev, config, required: list[str]) -> None:
-    """Install the skills a command needs into the supported agents, from git rather than npm.
+def ensure_skills(odev, config, required: list[str], version: str | None = None) -> None:
+    """Install the skills a command needs into the supported agents, from git and the Odoo source.
 
-    The requested skills are taken from the PS repository, cloned and pulled here rather than
-    installed through npx.
+    The requested skills are taken from the PS repository, cloned and pulled here rather than from
+    npm. The skills shipped with the Odoo source of `version` are added on top, so an agent working
+    on a checkout gets that version's own guidelines next to the shared ones.
 
     Failures are logged and swallowed: a missing network or SSH key must never prevent an AI agent
     from starting.
@@ -296,6 +326,7 @@ def ensure_skills(odev, config, required: list[str]) -> None:
     :param odev: The odev framework instance.
     :param config: The odev configuration.
     :param required: Declared names of the skills the command needs from the PS repository.
+    :param version: The Odoo version the agent runs against, whose source skills to add, if any.
     """
     try:
         git = _refresh_repository(odev, config)
@@ -305,7 +336,12 @@ def ensure_skills(odev, config, required: list[str]) -> None:
 
         skills = {name: path for name, path in _skills_in(git.path / "skills", disabled).items() if name in wanted}
 
-        install_skills(skills, Path.home(), [git.path / "skills"])
+        if version and (version_root := _version_skills_root(odev, version)):
+            skills.update(_skills_in(version_root, disabled))
+
+        # The worktrees root is always a managed root, not only when a version is given: a run
+        # without one must still prune the version skills a previous '-V' run linked in.
+        install_skills(skills, Path.home(), [git.path / "skills", odev.home_path / "worktrees"])
     except Exception as e:  # noqa: BLE001
         logger.warning(f"Could not install the {SKILLS_REPO!r} skills: {e}")
 
@@ -315,8 +351,8 @@ def demo():
     import tempfile  # noqa: PLC0415
 
     root = Path(tempfile.mkdtemp(prefix="odev-skills-demo-"))
-    clone_root, home = root / "repo" / "skills", root / "home"
-    managed_roots = [clone_root]
+    clone_root, worktrees_root, home = root / "repo" / "skills", root / "worktrees", root / "home"
+    managed_roots = [clone_root, worktrees_root]
     claude_dir = home / ".claude/skills"
     agy_dir = home / ".gemini/antigravity-cli/skills"
 
@@ -332,6 +368,11 @@ def demo():
     # A skill whose declared name differs from its directory name, as agents see it.
     (clone_root / "guidelines_dir").mkdir()
     (clone_root / "guidelines_dir" / "SKILL.md").write_text("---\nname: 'guidelines'\ndescription: x\n---\n")
+
+    # A version-specific skill shipped with the Odoo 20.0 source.
+    version_root = worktrees_root / "20.0" / "odoo" / "skills"
+    (version_root / "odoo-guidelines").mkdir(parents=True)
+    (version_root / "odoo-guidelines" / "SKILL.md").write_text("---\nname: odoo-guidelines\n---\n")
 
     # An 'npx skills add' installation of two of our skills, plus one from another source and one
     # of the user's own: only ours may be unlinked.
@@ -368,6 +409,7 @@ def demo():
     (agy_dir / "mine" / "SKILL.md").write_text("user's own\n")
 
     skills = {name: path for name, path in _skills_in(clone_root, set()).items() if name in {"odev", "guidelines"}}
+    skills.update(_skills_in(version_root, set()))
     install_skills(skills, home, managed_roots)
 
     assert _link_target(claude_dir / "test_skill") == foreign, "foreign link was overwritten"
@@ -378,9 +420,11 @@ def demo():
     assert not (claude_dir / "guidelines_dir").exists(), "skill was linked under its directory name"
     assert _link_target(claude_dir / "find-skills") == npm_dir / "find-skills", "skill of another source was pruned"
     assert not (claude_dir / "not_a_skill").exists(), "directory without SKILL.md was linked"
+    assert _link_target(claude_dir / "odoo-guidelines") == version_root / "odoo-guidelines", "version skill not linked"
     # agy gets copies, not links, and its directory-based skills carry our marker.
     assert (agy_dir / "odev").is_dir() and not (agy_dir / "odev").is_symlink(), "agy skill was linked, not copied"
     assert (agy_dir / "odev" / MANAGED_MARKER).is_file(), "copied skill was not marked as managed"
+    assert (agy_dir / "odoo-guidelines").is_dir(), "version skill was not copied into agy"
     assert (agy_dir / "mine" / "SKILL.md").read_text() == "user's own\n", "user's own agy copy was overwritten"
     assert not (home / SKILL_TARGETS[3][0]).exists(), "skills installed for an agent the user does not have"
 
@@ -397,6 +441,7 @@ def demo():
     assert not (claude_dir / "odev").exists(), "orphan link was kept"
     assert not (agy_dir / "odev").exists(), "orphan copy was kept"
     assert not (claude_dir / "guidelines").is_symlink(), "disabled skill was kept"
+    assert not (claude_dir / "odoo-guidelines").exists(), "version skill was kept after it left the install set"
     assert _link_target(claude_dir / "test_skill") == foreign, "foreign link was pruned"
     assert (agy_dir / "mine" / "SKILL.md").exists(), "user's own agy copy was pruned"
 

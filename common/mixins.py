@@ -428,6 +428,23 @@ class AICommandMixin:
 
         return [str(target_dir)]
 
+    def _skills_version(self, database: str | None, version: str | None) -> str | None:
+        """Resolve the Odoo version whose source skills to add, explicit or inferred.
+
+        A version named on the command line wins; failing that, the one of the database the run
+        works on is used, so an agent gets that version's guidelines whether the developer spelled
+        the version out with ``-V`` or only pointed at a database.
+        """
+        if version := version or self.args.version:
+            return version
+
+        if database:
+            db = LocalDatabase(database)
+            if db.exists and db.version:
+                return str(db.version)
+
+        return None
+
     def run_ai_agent(  # noqa: PLR0913 - carries the full context of one agent run
         self,
         prompt: str,
@@ -440,6 +457,10 @@ class AICommandMixin:
         """Helper to run the AI agent with common Odoo-related sandbox paths."""
         sandbox_dirs = self._get_sandbox_dirs(database, version or self.args.version)
 
+        # Resolved before the safety check nils a database that is not cloned: its version still
+        # tells which guidelines the code runs on, even when its data is kept out of the sandbox.
+        skills_version = self._skills_version(database, version)
+
         if database:
             should_clone = self._ensure_database_safety(database)
             if not should_clone:
@@ -448,7 +469,7 @@ class AICommandMixin:
         agent = self.get_ai_agent()
 
         agent.handler.ensure_skills_discoverable()
-        ensure_skills(self.odev, self.config, self.required_skills)
+        ensure_skills(self.odev, self.config, self.required_skills, version=skills_version)
 
         return agent.run(
             prompt,

@@ -54,6 +54,11 @@ odev config skills.disabled odoo_upgrade_skill,test_skill  # skip specific skill
 odev config skills.interval 7                              # refresh the skills weekly instead of daily
 ```
 
+When a run targets a specific Odoo version — named with `-V` (`odev ai -V 18.0`) or inferred from the database the agent
+works on — the skills shipped with that version's source (`<worktrees>/<version>/odoo/skills`, e.g. `odoo-guidelines`)
+are installed alongside the PS ones, so the agent gets the guidelines of the exact version it works on. They are swapped
+out when another version is selected.
+
 If you previously ran `npx skills add odoo-ps/ps-ai-skills`, its skills are unlinked from your agents the first time one
 runs: they would otherwise shadow the git-managed ones and stay frozen at the version you installed back then. The
 copies themselves are kept in `~/.agents/skills`, so any local edit you made is still there — use `npx skills remove` to
