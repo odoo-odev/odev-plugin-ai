@@ -4,7 +4,24 @@ This plugin acts as a core library to integrate Large Language Model (LLM) capab
 provides a unified, simple interface for interacting with various AI providers, allowing other plugins to easily
 leverage AI for tasks like code generation, translation, and analysis.
 
-This plugin is a foundational component and is used by other plugins such as `scaffold` and `translate`.
+This plugin is a foundational component and is used by other plugins such as
+[`ai-scaffold`](https://github.com/odoo-odev/odev-plugin-ai-scaffold),
+[`ai-upgrade`](https://github.com/odoo-odev/odev-plugin-ai-upgrade) and
+[`ai-translation`](https://github.com/odoo-odev/odev-plugin-ai-translation).
+
+## Installation
+
+Install [odev](https://github.com/odoo-odev/odev/tree/main?tab=readme-ov-file#installation) if not already done. You'll
+need odev version 4.0.0 or above.
+
+Enable this plugin by running:
+
+```bash
+odev plugin --enable odoo-odev/odev-plugin-ai
+```
+
+This plugin depends on [`odev-plugin-project`](https://github.com/odoo-odev/odev-plugin-project), which is enabled
+automatically.
 
 ## Prerequisites
 
@@ -41,6 +58,34 @@ following tools must be installed on your host system:
 
 Configuration is handled automatically when you first install `odev` or enable the AI plugin. You will be prompted to
 select your preferred LLM provider and enter the corresponding API key.
+
+## Commands
+
+The plugin adds one standalone command and enhances three existing `odev` commands with an `--ai` flag. All of them
+launch a CLI AI agent sandboxed with `bwrap`, pre-loaded with the relevant [skills](#skills).
+
+| Command | Description |
+| --- | --- |
+| `odev ai [<database>] <prompt...>` | Launch an interactive AI CLI agent on an optional local database. Everything after the (optional) database name is taken as the prompt, so `odev ai "fix the failing test in sale"` works as written. |
+| `odev run --ai [<database>]` | Run Odoo and, if the startup/installation fails, hand the logs to the agent to diagnose and fix. |
+| `odev test --ai [<database>]` | Run Odoo tests and let the agent fix the failures, following the rules in the `test_skill`. |
+| `odev pre-commit --ai [--run]` | Run `pre-commit` checks and let the agent fix the reported issues, then commit the fixes. `--run` runs the checks without the agent. |
+
+### Common options
+
+These options are shared by every AI command above (and by the commands that other AI plugins add, such as `upgrade`,
+`analyze` and `scaffold`):
+
+| Option | Description |
+| --- | --- |
+| `--cli <agent>` | The CLI AI agent to use: `claude`, `agy`, `copilot` or `opencode-cli`. |
+| `--model <model>` | The specific model to use for the chosen agent. |
+| `-y`, `--yolo` | Automatically accept all AI commands (YOLO mode). |
+| `-H`, `--headless` | Run the agent non-interactively; nothing is asked on the terminal. |
+| `--resume [<id>]` | Resume a previous session, by id or `latest`. Bare `--resume` resumes the latest session of the working directory. |
+| `-E`, `--edit` | Open the prompt in `$EDITOR` before sending it; save it empty to abort the run. |
+| `-d`, `--dirs <dirs>` | Comma-separated list of extra directories to mount read-write in the sandbox. |
+| `-V`, `--version <version>` | Launch the agent in the worktree of a specific Odoo version (e.g. `17.0`, `saas-17.2`, `master`) instead of a database's repository. The worktree is created and updated automatically, and the version's own skills are loaded. |
 
 ## Skills
 
