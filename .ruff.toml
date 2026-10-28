@@ -107,6 +107,9 @@ ignore = [
     "F403",     # ignore * imports
     "I001",     # ignore unsorted imports
 ]
+"tests/**" = [
+    "S101",     # asserts are how a test states its expectations
+]
 
 [lint.pydocstyle]
 convention = "pep257"

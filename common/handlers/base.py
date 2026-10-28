@@ -39,15 +39,6 @@ class BaseAgentHandler:
         """Return the relative path to the agent's main configuration directory."""
         return
 
-    def get_global_skills_dir(self):
-        """Return the directory this agent reads its global skills from.
-
-        Only meaningful for agents the skills CLI does not install to. It keeps
-        the shared ~/.agents/skills store up to date and symlinks it into
-        ~/.claude/skills, so Claude Code needs nothing extra and returns None.
-        """
-        return
-
     def get_global_config_name(self):
         """Return name of global config file (e.g. .claude.json)."""
         return

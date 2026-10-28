@@ -13,6 +13,7 @@ from .editor import PromptEditingAbortedError, edit_prompt
 from .handlers import get_agent_handler
 from .postgres import PostgresSandbox
 from .sandbox import ExecutionSpec, get_sandbox
+from .skills import skills_clone_path
 
 
 logger = logging.getLogger(__name__)
@@ -72,6 +73,8 @@ class AgentCLI(OdevFrameworkMixin):
             host_home / ".claude",
             host_home / ".agents",
             host_home / ".antigravity",
+            # Skills are symlinked into the agents' config dirs from this clone
+            skills_clone_path(self.odev),
         ]
         agent_files = [
             host_home / ".gitconfig",
