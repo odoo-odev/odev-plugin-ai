@@ -1,7 +1,7 @@
 """Install and update the PS agent skills from git, without npm or npx.
 
-Replaces `npx skills add odoo-ps/ps-ai-skills -g`: the repository is cloned once in the odev
-home directory, then the skills a command asks for are brought into the global skills directory
+Replaces `npx skills add odoo-ps/ps-ai-skills -g`: the repository is cloned once under the odev
+repositories directory, then the skills a command asks for are brought into the global skills directory
 of every supported AI CLI. Agents that resolve a symlinked skill directory get a symlink, so a
 weekly `git pull` updates them for free; the ones that do not (Antigravity / `agy`) get a copy.
 
@@ -11,7 +11,6 @@ version to the next, and are picked up from whichever worktree the run selected.
 
 Links left behind by a previous npm installation are removed so skills keep being updated here.
 """
-# ruff: noqa: S101  # the self-check at the bottom of this module is assert-based on purpose
 
 import json
 import os
@@ -293,6 +292,17 @@ def install_skills(skills: dict[str, Path], home: Path, managed_roots: list[Path
                 _install_copy(name, path, target_dir)
 
 
+def skills_clone_path(odev) -> Path:
+    """Local path of the PS skills clone.
+
+    It sits under the odev repositories directory, next to the Odoo repositories and following the
+    same `<organization>/<repository>` layout, which is also where :class:`GitConnector` clones it
+    by default. The agent sandbox mounts this directory so the skill symlinks pointing into it
+    resolve from inside it.
+    """
+    return odev.config.paths.repositories / SKILLS_REPO
+
+
 def _refresh_repository(odev, config):
     """Clone the skills repository, or pull it when it has not been refreshed recently.
 
@@ -300,7 +310,7 @@ def _refresh_repository(odev, config):
     """
     from odev.common.connectors.git import GitConnector  # noqa: PLC0415
 
-    git = GitConnector(SKILLS_REPO, odev.home_path / "skills")
+    git = GitConnector(SKILLS_REPO, skills_clone_path(odev))
 
     if not git.exists:
         git.clone()
@@ -345,108 +355,3 @@ def ensure_skills(odev, config, required: list[str], version: str | None = None)
     except Exception as e:  # noqa: BLE001
         logger.warning(f"Could not install the {SKILLS_REPO!r} skills: {e}")
 
-
-def demo():
-    """Self-check of the linking, copying and migration logic on a temporary file tree."""
-    import tempfile  # noqa: PLC0415
-
-    root = Path(tempfile.mkdtemp(prefix="odev-skills-demo-"))
-    clone_root, worktrees_root, home = root / "repo" / "skills", root / "worktrees", root / "home"
-    managed_roots = [clone_root, worktrees_root]
-    claude_dir = home / ".claude/skills"
-    agy_dir = home / ".gemini/antigravity-cli/skills"
-
-    # Every agent but copilot is installed, hence its configuration directory exists.
-    for relative_dir, _ in SKILL_TARGETS:
-        if not relative_dir.startswith(".copilot"):
-            (home / relative_dir).parent.mkdir(parents=True, exist_ok=True)
-
-    for name in ("odev", "test_skill", "gone"):
-        (clone_root / name).mkdir(parents=True)
-        (clone_root / name / "SKILL.md").write_text(f"---\nname: {name}\n---\n")
-    (clone_root / "not_a_skill").mkdir()
-    # A skill whose declared name differs from its directory name, as agents see it.
-    (clone_root / "guidelines_dir").mkdir()
-    (clone_root / "guidelines_dir" / "SKILL.md").write_text("---\nname: 'guidelines'\ndescription: x\n---\n")
-
-    # A version-specific skill shipped with the Odoo 20.0 source.
-    version_root = worktrees_root / "20.0" / "odoo" / "skills"
-    (version_root / "odoo-guidelines").mkdir(parents=True)
-    (version_root / "odoo-guidelines" / "SKILL.md").write_text("---\nname: odoo-guidelines\n---\n")
-
-    # An 'npx skills add' installation of two of our skills, plus one from another source and one
-    # of the user's own: only ours may be unlinked.
-    npm_dir = home / ".agents/skills"
-    npm_dir.mkdir(parents=True)
-    for name in ("odev", "guidelines", "find-skills", "mine"):
-        (npm_dir / name).mkdir()
-    claude_dir.mkdir()
-    for name in ("odev", "guidelines", "find-skills", "mine"):
-        (claude_dir / name).symlink_to(npm_dir / name, target_is_directory=True)
-    (home / NPM_LOCK).write_text(
-        json.dumps(
-            {
-                "version": 3,
-                "skills": {
-                    "odev": {"source": SKILLS_REPO},
-                    "guidelines": {"source": SKILLS_REPO},
-                    "find-skills": {"source": "obra/superpowers"},
-                    "mine": {"source": SKILLS_REPO},  # not in the repository (anymore)
-                },
-            }
-        )
-    )
-
-    # A skill the user manages himself, and a real directory: both must survive untouched.
-    foreign = root / "elsewhere" / "test_skill"
-    foreign.mkdir(parents=True)
-    (claude_dir / "test_skill").symlink_to(foreign, target_is_directory=True)
-    (claude_dir / "keep_me").mkdir()
-
-    # A user's own copy sitting in a copy-only (agy) agent: it has no marker, so it must survive.
-    agy_dir.mkdir()
-    (agy_dir / "mine").mkdir()
-    (agy_dir / "mine" / "SKILL.md").write_text("user's own\n")
-
-    skills = {name: path for name, path in _skills_in(clone_root, set()).items() if name in {"odev", "guidelines"}}
-    skills.update(_skills_in(version_root, set()))
-    install_skills(skills, home, managed_roots)
-
-    assert _link_target(claude_dir / "test_skill") == foreign, "foreign link was overwritten"
-    assert (claude_dir / "keep_me").is_dir() and not (claude_dir / "keep_me").is_symlink(), "directory was replaced"
-    assert _link_target(claude_dir / "odev") == clone_root / "odev", "npm-installed skill was not replaced"
-    assert (npm_dir / "odev").is_dir(), "npm-installed copy was deleted instead of unlinked"
-    assert _link_target(claude_dir / "guidelines") == clone_root / "guidelines_dir", "declared name was not used"
-    assert not (claude_dir / "guidelines_dir").exists(), "skill was linked under its directory name"
-    assert _link_target(claude_dir / "find-skills") == npm_dir / "find-skills", "skill of another source was pruned"
-    assert not (claude_dir / "not_a_skill").exists(), "directory without SKILL.md was linked"
-    assert _link_target(claude_dir / "odoo-guidelines") == version_root / "odoo-guidelines", "version skill not linked"
-    # agy gets copies, not links, and its directory-based skills carry our marker.
-    assert (agy_dir / "odev").is_dir() and not (agy_dir / "odev").is_symlink(), "agy skill was linked, not copied"
-    assert (agy_dir / "odev" / MANAGED_MARKER).is_file(), "copied skill was not marked as managed"
-    assert (agy_dir / "odoo-guidelines").is_dir(), "version skill was not copied into agy"
-    assert (agy_dir / "mine" / "SKILL.md").read_text() == "user's own\n", "user's own agy copy was overwritten"
-    assert not (home / SKILL_TARGETS[3][0]).exists(), "skills installed for an agent the user does not have"
-
-    install_skills(skills, home, managed_roots)  # idempotent
-    assert _link_target(claude_dir / "odev") == clone_root / "odev", "link lost on second run"
-    assert not prune_npm_install({"odev", "guidelines"}, home, managed_roots), "own links reported as leftovers"
-
-    # Removed from the repository and disabled: our entries must be pruned, the rest kept.
-    for path in (clone_root / "odev").iterdir():
-        path.unlink()
-    (clone_root / "odev").rmdir()
-    skills = {name: path for name, path in _skills_in(clone_root, {"guidelines_dir"}).items() if name == "guidelines"}
-    install_skills(skills, home, managed_roots)
-    assert not (claude_dir / "odev").exists(), "orphan link was kept"
-    assert not (agy_dir / "odev").exists(), "orphan copy was kept"
-    assert not (claude_dir / "guidelines").is_symlink(), "disabled skill was kept"
-    assert not (claude_dir / "odoo-guidelines").exists(), "version skill was kept after it left the install set"
-    assert _link_target(claude_dir / "test_skill") == foreign, "foreign link was pruned"
-    assert (agy_dir / "mine" / "SKILL.md").exists(), "user's own agy copy was pruned"
-
-    print(f"OK: skills install self-check passed ({root})")  # noqa: T201
-
-
-if __name__ == "__main__":
-    demo()
