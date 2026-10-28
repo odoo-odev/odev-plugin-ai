@@ -20,7 +20,7 @@ import subprocess
 import tempfile
 from pathlib import Path
 
-from odev.common.errors import CommandError
+from odev.common.errors import OdevError
 from odev.common.logging import logging
 
 
@@ -45,7 +45,7 @@ def edit_prompt(prompt: str) -> str:
     :raises PromptEditingAbortedError: The buffer was saved empty, or the editor exited in
         error - ``:cq`` in vim. Both mean the run is off, and neither is a failure to
         report as one.
-    :raises CommandError: No editor could be found to open. Deliberately fatal: running
+    :raises OdevError: No editor could be found to open. Deliberately fatal: running
         the prompt unedited is the one thing ``--edit`` exists to prevent, so a run that
         cannot be edited does not quietly become a run that was not.
     """
@@ -72,7 +72,7 @@ def edit_prompt(prompt: str) -> str:
 
         edited = path.read_text(encoding="utf-8").strip()
     except OSError as e:
-        raise CommandError(f"Could not edit the prompt in {' '.join(editor)}: {e}") from e
+        raise OdevError(f"Could not edit the prompt in {' '.join(editor)}: {e}") from e
     finally:
         path.unlink(missing_ok=True)
 
@@ -105,4 +105,4 @@ def _resolve_editor() -> list[str]:
             logger.debug(f"No editor is configured; opening {fallback}.")
             return [path]
 
-    raise CommandError("No editor to open the prompt in: set $EDITOR to the one you use, e.g. `export EDITOR=vim`.")
+    raise OdevError("No editor to open the prompt in: set $EDITOR to the one you use, e.g. `export EDITOR=vim`.")

@@ -159,7 +159,7 @@ class AICommandMixin:
             sandbox_cls = get_sandbox_class()
         except RuntimeError as e:
             console.print(f"\n[bold red]Error:[/] {e}")
-            raise CommandError(str(e)) from e
+            raise CommandError(str(e), self) from e
 
         supported, message = sandbox_cls.check_support()
         if supported:
@@ -173,7 +173,7 @@ class AICommandMixin:
                 return
             console.print(f"\n[bold red]Error:[/] {message}")
 
-        raise CommandError("AI sandbox backend is not available on this host.")
+        raise CommandError("AI sandbox backend is not available on this host.", self)
 
     def _offer_bwrap_setup(self) -> bool:
         """Offer to run the plugin setup to repair a fixable bwrap AppArmor restriction.
@@ -198,8 +198,7 @@ class AICommandMixin:
         plugin_setup.setup(self.odev)
         return True
 
-    @staticmethod
-    def _ensure_cli_installed(final_cli: str) -> None:
+    def _ensure_cli_installed(self, final_cli: str) -> None:
         """Hard-fail with a helpful message if the chosen CLI isn't on PATH."""
         if shutil.which(final_cli):
             return
@@ -214,7 +213,7 @@ class AICommandMixin:
             f"\n[bold red]Error:[/] AI CLI '{final_cli}' is not installed (not found in PATH).\n"
             + (f"Install it with:\n{hint}\n" if hint else "")
         )
-        raise CommandError(f"AI CLI '{final_cli}' is not installed.")
+        raise CommandError(f"AI CLI '{final_cli}' is not installed.", self)
 
     def _resolve_cli(self) -> str:
         """Return the AI CLI to run, asking for a favorite the first time around."""
