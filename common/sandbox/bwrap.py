@@ -35,12 +35,15 @@ def _check_bwrap_support() -> tuple[bool, str]:
             "  Arch:          sudo pacman -S bubblewrap"
         )
     try:
-        # Try a minimal bwrap command that requires user namespaces
+        # Actually create a user namespace: bwrap exits on `--version` *before* unsharing,
+        # so pairing it with `--unshare-user` never exercises the restriction we are probing
+        # for. Binding `/` read-only gives the trivial `true` command a filesystem to run in,
+        # which forces bwrap all the way through the uid-map setup that AppArmor blocks.
         subprocess.run(
-            ["bwrap", "--unshare-user", "--version"],  # noqa: S607 - found on PATH, /usr/bin or /bin by distro
+            ["bwrap", "--unshare-user", "--ro-bind", "/", "/", "true"],  # noqa: S607 - found on PATH, /usr/bin or /bin by distro
             capture_output=True,
             check=True,
-            timeout=2,
+            timeout=5,
         )
     except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError) as e:
         stderr = getattr(e, "stderr", b"").decode()
