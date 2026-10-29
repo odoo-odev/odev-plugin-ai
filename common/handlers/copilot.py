@@ -14,7 +14,7 @@ class CopilotHandler(BaseAgentHandler):
     def get_agent_config_rel_path(self):
         return ".copilot"
 
-    def get_command(self, prompt, resume, all_candidate_paths, model, headless, yolo, mcp_server_names=()):  # noqa: PLR0913 - signature set by BaseAgentHandler
+    def get_command(self, prompt, resume, all_candidate_paths, model, headless, yolo, plan=False, mcp_server_names=()):  # noqa: PLR0913 - signature set by BaseAgentHandler
         cmd = ["copilot"]
         if prompt:
             cmd.extend(["-p" if headless else "-i", prompt])
@@ -23,6 +23,11 @@ class CopilotHandler(BaseAgentHandler):
         if yolo:
             cmd.append("--yolo")
         else:
+            # Plan mode has Copilot lay out a plan before it acts; the allow-tools below
+            # still govern what it may do once that plan is approved. plan and yolo are
+            # never both set - AICommandMixin resolves that upstream.
+            if plan:
+                cmd.append("--plan")
             cmd.extend(
                 [
                     "--allow-tool=read",

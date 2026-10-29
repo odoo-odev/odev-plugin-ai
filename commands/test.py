@@ -31,7 +31,7 @@ class TestCommand(BaseTestCommand, AICommandMixin):
         if not self.args.no_auto_tags:
             self.apply_auto_tags()
 
-        _ai_bool = {"--ai", "-y", "--yolo", "-H", "--headless"}
+        _ai_bool = {"--ai", "-y", "--yolo", "-H", "--headless", "-P", "--plan"}
         _ai_valued = {"--cli", "--model", "--resume", "-d", "--dirs"}
 
         args_to_pass, _skip = [], False
