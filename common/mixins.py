@@ -7,6 +7,7 @@ if TYPE_CHECKING:
     from odev.common.args import Namespace
     from odev.common.config import Config
     from odev.common.console import Console
+    from odev.common.errors import CommandError
     from odev.common.odev import Odev
 
 import shutil
@@ -15,7 +16,6 @@ from pathlib import Path
 from odev.common import args
 from odev.common.console import console
 from odev.common.databases.local import LocalDatabase
-from odev.common.errors import CommandError
 from odev.common.logging import logging
 from odev.common.version import OdooVersion
 
@@ -49,6 +49,8 @@ class AICommandMixin:
         config: "Config"
         console: "Console"
         _name: str
+
+        def error(self, message: str) -> "CommandError": ...
 
     sandbox_repository: Path | None = None
     """A checkout of the code the run is about, to work in ahead of anywhere else.
@@ -142,7 +144,7 @@ class AICommandMixin:
             sandbox_cls = get_sandbox_class()
         except RuntimeError as e:
             console.print(f"\n[bold red]Error:[/] {e}")
-            raise CommandError(str(e)) from e
+            raise self.error(str(e)) from e
 
         supported, message = sandbox_cls.check_support()
         if supported:
@@ -156,7 +158,7 @@ class AICommandMixin:
                 return
             console.print(f"\n[bold red]Error:[/] {message}")
 
-        raise CommandError("AI sandbox backend is not available on this host.")
+        raise self.error("AI sandbox backend is not available on this host.")
 
     def _offer_bwrap_setup(self) -> bool:
         """Offer to run the plugin setup to repair a fixable bwrap AppArmor restriction.
@@ -164,7 +166,8 @@ class AICommandMixin:
         :return: Whether the setup was run (the caller should then re-check support).
         :rtype: bool
         """
-        from odev.plugins.odev_plugin_ai import setup as plugin_setup  # noqa: PLC0415 - avoids an import cycle at module load
+        # Imported here rather than at module level: importing it at load time causes an import cycle.
+        from odev.plugins.odev_plugin_ai import setup as plugin_setup  # noqa: PLC0415
 
         # The profile only helps when the AppArmor user-namespace restriction is actually
         # what is blocking bwrap; for anything else (e.g. bwrap not installed) setup is a no-op.
@@ -181,8 +184,7 @@ class AICommandMixin:
         plugin_setup.setup(self.odev)
         return True
 
-    @staticmethod
-    def _ensure_cli_installed(final_cli: str) -> None:
+    def _ensure_cli_installed(self, final_cli: str) -> None:
         """Hard-fail with a helpful message if the chosen CLI isn't on PATH."""
         if shutil.which(final_cli):
             return
@@ -197,7 +199,7 @@ class AICommandMixin:
             f"\n[bold red]Error:[/] AI CLI '{final_cli}' is not installed (not found in PATH).\n"
             + (f"Install it with:\n{hint}\n" if hint else "")
         )
-        raise CommandError(f"AI CLI '{final_cli}' is not installed.")
+        raise self.error(f"AI CLI '{final_cli}' is not installed.")
 
     def _resolve_cli(self) -> str:
         """Return the AI CLI to run, asking for a favorite the first time around."""
