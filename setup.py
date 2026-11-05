@@ -7,10 +7,13 @@ globally disabling the restriction via
 `kernel.apparmor_restrict_unprivileged_userns=0`, we install a targeted
 AppArmor profile that grants the `userns` capability to the bwrap binary only.
 
-Recent AppArmor releases (4.1+) ship their own `bwrap-userns-restrict` profile
-attached to `/usr/bin/bwrap`; when that is present the system already solves the
-problem and we leave it alone, as a second profile attached to the same binary
-would conflict with it.
+Recent AppArmor releases (4.x) ship their own `bwrap-userns-restrict` profile
+attached to `/usr/bin/bwrap`, which already grants bwrap the user namespaces the
+AI sandbox needs. When that profile is present we defer to it - loading it if the
+distro left it unparsed - and never install ours alongside it, since two profiles
+attached to the same binary do not compose and leave bwrap under the catch-all
+restriction. If an earlier version of this plugin installed its own profile next
+to the distro one, setup removes it again to clear that conflict.
 
 The profile lives in a file this plugin owns (`/etc/apparmor.d/odev-bwrap`): we
 never overwrite a file we did not write, and `teardown()` removes it again when
@@ -40,8 +43,17 @@ BWRAP_PATH = Path("/usr/bin/bwrap")
 PROFILE_PATH = Path("/etc/apparmor.d/odev-bwrap")
 """AppArmor profile file this plugin owns; never a path shipped by the distro."""
 
-SYSTEM_BWRAP_PROFILE = Path("/etc/apparmor.d/bwrap")
-"""Distro-shipped bwrap profile (e.g. `bwrap-userns-restrict` on AppArmor 4.1+)."""
+SYSTEM_BWRAP_PROFILES = (
+    Path("/etc/apparmor.d/bwrap-userns-restrict"),
+    Path("/etc/apparmor.d/bwrap"),
+)
+"""Distro-shipped bwrap profiles, newest naming first.
+
+AppArmor 4.x (Ubuntu 24.04.2+, 25.04, 26.04) ships the profile as
+`bwrap-userns-restrict`; older or alternative packaging used the bare `bwrap`
+name. Either attaches a profile to `/usr/bin/bwrap`, so a second profile of ours
+on the same binary would not compose with it.
+"""
 
 RESTRICT_SYSCTL = Path("/proc/sys/kernel/apparmor_restrict_unprivileged_userns")
 """Sysctl flag Ubuntu 24.04+ sets to `1` to block unprivileged user namespaces."""
@@ -115,6 +127,36 @@ def _restriction_active() -> bool:
         return RESTRICT_SYSCTL.read_text(encoding="utf-8").strip() == "1"
     except OSError:
         return False
+
+
+def _distro_bwrap_profile() -> Path | None:
+    """Return the distro-shipped bwrap AppArmor profile file, if one is present."""
+    for candidate in SYSTEM_BWRAP_PROFILES:
+        if candidate.exists():
+            return candidate
+    return None
+
+
+def _bwrap_userns_works() -> bool:
+    """Whether bwrap can already create an unprivileged user namespace on this host.
+
+    This mirrors the sandbox's own support probe (`common/sandbox/bwrap.py`): the
+    sysctl flag only says the restriction is switched on, not whether an AppArmor
+    profile is granting bwrap the exception it needs, so the one reliable answer is
+    to ask bwrap to make a namespace and see whether it is allowed to.
+    """
+    if not shutil.which("bwrap"):
+        return False
+    try:
+        subprocess.run(  # noqa: S607 - bwrap resolved on PATH, fixed arguments
+            ["bwrap", "--unshare-user", "--ro-bind", "/", "/", "true"],
+            capture_output=True,
+            check=True,
+            timeout=5,
+        )
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError):
+        return False
+    return True
 
 
 def _trusted_bwrap_binary() -> Path | None:
@@ -206,6 +248,71 @@ def _remove_profile(parser: str | None) -> None:
     )
 
 
+def _defer_to_distro_profile(odev, distro_profile: Path) -> None:
+    """Rely on the distro's own bwrap profile rather than installing a rival one.
+
+    The distro profile (e.g. `bwrap-userns-restrict`) already grants bwrap the
+    userns capability the AI sandbox needs. We never add ours next to it - and we
+    remove ours if an earlier run put it there, since the two do not compose. When
+    bwrap still cannot make a namespace, the distro profile shipped but was not
+    loaded, so we load it. All of this only happens when something actually needs
+    doing, so a host where the distro profile already works is never touched.
+    """
+    parser = _find_apparmor_parser()
+    has_stale_profile = _profile_installed()
+    # Probed before removing ours: with a rival profile loaded the result is False
+    # anyway, so this only reads True when nothing needs fixing and we can bail out.
+    already_works = not has_stale_profile and _bwrap_userns_works()
+
+    if already_works:
+        logger.debug(f"Distro bwrap profile {distro_profile.name} is active; nothing to do.")
+        return
+
+    actions = []
+    if has_stale_profile:
+        actions.append(f"remove the conflicting profile this plugin installed at {PROFILE_PATH}")
+    actions.append(f"load the distro bwrap profile ({distro_profile})")
+
+    if not parser and not has_stale_profile:
+        logger.warning(
+            f"A distro bwrap profile is present ({distro_profile}) but bwrap cannot create a "
+            "user namespace and apparmor_parser was not found to load it. Load it manually with:\n"
+            f"  sudo apparmor_parser -r {distro_profile}"
+        )
+        return
+
+    if not _confirm(
+        odev,
+        f"The AI sandbox needs AppArmor to {' and '.join(actions)}. "
+        "This runs sudo to update a kernel security policy. Do it now?",
+    ):
+        logger.info(
+            "Skipped. To enable the AI sandbox later, run:\n"
+            + (f"  sudo apparmor_parser -R {PROFILE_PATH} && sudo rm {PROFILE_PATH}\n" if has_stale_profile else "")
+            + f"  sudo apparmor_parser -r {distro_profile}"
+        )
+        return
+
+    if has_stale_profile:
+        logger.info(
+            f"A distro bwrap profile is present ({distro_profile.name}); removing the competing "
+            "profile this plugin installed, which does not compose with it."
+        )
+        try:
+            _remove_profile(parser)
+        except (subprocess.CalledProcessError, OSError) as error:
+            logger.warning(
+                f"Could not remove {PROFILE_PATH} automatically ({error}); remove it with 'sudo rm {PROFILE_PATH}'."
+            )
+
+    if parser:
+        logger.info(f"Loading the distro bwrap AppArmor profile ({distro_profile}) so the AI sandbox can start.")
+        subprocess.run(  # noqa: S603 - fixed argv built from a validated parser path and a distro-owned file
+            ["sudo", parser, "-r", str(distro_profile)],
+            check=False,
+        )
+
+
 def _manual_instructions(bwrap_path: Path) -> str:
     """Steps for a user to install the profile by hand if the automatic run fails."""
     profile = PROFILE_TEMPLATE.format(bwrap_path=bwrap_path)
@@ -241,11 +348,9 @@ def setup(odev) -> None:
         logger.debug("Unprivileged user namespaces are not restricted, skipping bwrap AppArmor setup.")
         return
 
-    if SYSTEM_BWRAP_PROFILE.exists():
-        logger.debug(
-            f"A distro-provided bwrap profile is present ({SYSTEM_BWRAP_PROFILE}); "
-            "leaving it in place instead of installing a conflicting one."
-        )
+    distro_profile = _distro_bwrap_profile()
+    if distro_profile is not None:
+        _defer_to_distro_profile(odev, distro_profile)
         return
 
     bwrap_path = _trusted_bwrap_binary()
