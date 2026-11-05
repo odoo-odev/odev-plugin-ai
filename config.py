@@ -28,6 +28,31 @@ class AiSection(Section):
     def favorite_cli(self, value: str):
         self.set("favorite_cli", value)
 
+    @property
+    def offer_github_access(self) -> str:
+        """Whether to offer giving the AI agent a GitHub token, for `gh` to open pull requests.
+
+        'ask' offers it the next time an agent starts, 'never' stops offering it. Set
+        back to 'ask' to be offered again. Only offered when `gh` is installed.
+        """
+        return self.get("offer_github_access", "ask")
+
+    @offer_github_access.setter
+    def offer_github_access(self, value: str):
+        if value not in ("ask", "never"):
+            raise ValueError(f"'ai.offer_github_access' must be 'ask' or 'never', got {value!r}")
+
+        self.set("offer_github_access", value)
+
+    @property
+    def gh_tip_shown(self) -> str:
+        """Whether the tip about installing `gh` was shown already ('true' or 'false')."""
+        return self.get("gh_tip_shown", "false")
+
+    @gh_tip_shown.setter
+    def gh_tip_shown(self, value: str):
+        self.set("gh_tip_shown", str(value).lower())
+
     def get_favorite_model(self, cli: str) -> str | None:
         """Return the favorite model specifically for the given CLI agent."""
         return self.get(f"favorite_model_{cli}")

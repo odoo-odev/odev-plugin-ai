@@ -1,6 +1,8 @@
+import contextlib
 import json
 import os
 import shutil
+import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -343,18 +345,71 @@ class AgentCLI(OdevFrameworkMixin):
             return None
 
     def _setup_github_token(self) -> list[tuple[str, str]]:
-        """Retrieve GITHUB_TOKEN for PR creation and other GitHub operations."""
-        try:
-            token = self.store.secrets.get(
-                GITHUB_DOMAIN,
-                scope="api",
-                fields=["password"],
-                ask_missing=True,
-            ).password
+        """Return the GitHub token to hand the agent, for `gh` to open pull requests.
 
-            if token:
-                return [("GITHUB_TOKEN", token), ("GH_TOKEN", token)]
+        A token lets the agent act on GitHub with the user's rights, so it is never asked
+        for out of the blue: only when `gh` is there to use it, after saying what it is
+        for, and with "no" as the default answer - remembered, so it is asked once.
+        """
+        if not shutil.which("gh"):
+            if self.config.ai.gh_tip_shown != "true":
+                logger.info(
+                    "Did you know? With the GitHub CLI (`gh`) installed, the AI agent can open pull requests "
+                    "for you. See https://cli.github.com to install it."
+                )
+                self.config.ai.gh_tip_shown = "true"
+            return []
+
+        token = self._get_github_token()
+        return [("GITHUB_TOKEN", token), ("GH_TOKEN", token)] if token else []
+
+    def _get_github_token(self) -> str | None:
+        """Find a GitHub token already set up, or offer to configure one."""
+        try:
+            if token := self.store.secrets.get(
+                GITHUB_DOMAIN, scope="api", fields=["password"], ask_missing=False
+            ).password:
+                return token
         except Exception as e:  # noqa: BLE001 - the secret store may raise anything, the token is optional
             logger.debug(f"Could not retrieve GitHub secret: {e}")
 
-        return []
+        # Already logged in with `gh auth login`: nothing to ask.
+        with contextlib.suppress(OSError, subprocess.SubprocessError):
+            result = subprocess.run(
+                ["gh", "auth", "token"],  # noqa: S607 - found on PATH just above
+                capture_output=True,
+                text=True,
+                timeout=10,
+                check=False,
+            )
+            if result.returncode == 0 and (token := result.stdout.strip()):
+                return token
+
+        if self.headless or self.config.ai.offer_github_access == "never":
+            return None
+
+        logger.info(
+            """The AI agent can open pull requests on GitHub for you, using a GitHub token.
+            With that token, the agent can do on GitHub anything your account can do on the repositories you allow.
+            If you are not sure, answer no: the agent works without it."""
+        )
+        if not self.console.confirm("Give the AI agent a GitHub token?", default=False):
+            self.config.ai.offer_github_access = "never"
+            logger.info("You will not be asked again. To be asked again: `odev config ai.offer_github_access ask`.")
+            return None
+
+        logger.info(
+            """Create a token on https://github.com/settings/tokens, giving it only access to the repositories
+            the agent should work on. It is stored encrypted by odev."""
+        )
+        try:
+            return self.store.secrets.get(
+                GITHUB_DOMAIN,
+                scope="api",
+                fields=["password"],
+                prompt_format="GitHub token:",
+                ask_missing=True,
+            ).password
+        except Exception as e:  # noqa: BLE001 - the secret store may raise anything, the token is optional
+            logger.debug(f"Could not store the GitHub secret: {e}")
+            return None
