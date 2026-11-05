@@ -1,9 +1,51 @@
 import json
+import os
+import re
+import shutil
+from pathlib import Path
 
 from odev.common.logging import logging
 
 
 logger = logging.getLogger(__name__)
+
+ODEV_WRAPPER_PATTERN = re.compile(rb"\bodev\s+ai\b")
+"""What gives away a script that only hands the agent's name back to ``odev ai``.
+
+Installers put such a wrapper on PATH under the agent's own name (``claude`` running
+``odev ai -f``), so that typing the agent's name lands in the sandbox. Inside the
+sandbox the same name must reach the real binary, or the wrapper starts odev again.
+"""
+
+WRAPPER_MAX_SIZE = 4096
+"""Above this size a file on PATH is taken for a real binary and not read."""
+
+
+def is_odev_wrapper(path: Path) -> bool:
+    """Tell whether ``path`` is a small script that calls back into ``odev ai``."""
+    try:
+        if path.stat().st_size > WRAPPER_MAX_SIZE:
+            return False
+        content = path.read_bytes()
+    except OSError:
+        return False
+    return content.startswith(b"#!") and bool(ODEV_WRAPPER_PATTERN.search(content))
+
+
+def which_agent(name: str) -> str | None:
+    """Return the absolute path of the agent CLI ``name``, skipping odev's own wrappers.
+
+    :param name: The command name of the agent, as typed on a shell.
+    :return: The first executable on PATH by that name that is not an odev wrapper, or
+        None when there is none.
+    """
+    for directory in os.environ.get("PATH", os.defpath).split(os.pathsep):
+        if not directory:
+            continue
+        found = shutil.which(name, path=directory)
+        if found and not is_odev_wrapper(Path(found)):
+            return str(Path(found).absolute())
+    return None
 
 
 class BaseAgentHandler:

@@ -4,7 +4,7 @@ from pathlib import Path
 
 from odev.common.logging import logging
 
-from .base import BaseAgentHandler
+from .base import BaseAgentHandler, which_agent
 
 
 logger = logging.getLogger(__name__)
@@ -180,7 +180,9 @@ class ClaudeHandler(BaseAgentHandler):
         return None
 
     def get_command(self, prompt, resume, all_candidate_paths, model, headless, yolo, mcp_server_names=()):  # noqa: PLR0913 - signature set by BaseAgentHandler
-        cmd = ["claude"]
+        # The real binary by its absolute path: the sandbox PATH has ~/.local/bin ahead
+        # of /usr/bin, where installers may have put a `claude` wrapper running odev.
+        cmd = [which_agent("claude") or "claude"]
         if prompt:
             if headless:
                 cmd.extend(["-p", prompt])

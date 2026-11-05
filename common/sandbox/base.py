@@ -388,8 +388,9 @@ class Sandbox(OdevFrameworkMixin, ABC):
         for rel_dir in relevant_dirs:
             is_persistent = rel_dir in persistent_dirs
             target_dir = (host_home / rel_dir) if is_persistent else (playground / rel_dir)
-            if not is_persistent:
-                target_dir.mkdir(parents=True, exist_ok=True)
+            # A persistent dir is the host's own, absent until the agent has run once
+            # outside of odev - which never happens when a wrapper shadows its name.
+            target_dir.mkdir(parents=True, exist_ok=True)
             self._copy_agent_credentials(target_dir, rel_dir, is_persistent, host_home)
 
         # Copy global CLI config file (e.g. ~/.claude.json)
@@ -406,8 +407,9 @@ class Sandbox(OdevFrameworkMixin, ABC):
         if rel_dir := self.handler.get_agent_config_rel_path():
             is_persistent = rel_dir in persistent_dirs
             target_dir = (host_home / rel_dir) if is_persistent else (playground / rel_dir)
-            if not is_persistent:
-                target_dir.mkdir(parents=True, exist_ok=True)
+            # A persistent dir is the host's own, absent until the agent has run once
+            # outside of odev - which never happens when a wrapper shadows its name.
+            target_dir.mkdir(parents=True, exist_ok=True)
 
             self.handler.inject_trust(target_dir, trusted_paths)
             self.handler.cleanup_junk(target_dir)

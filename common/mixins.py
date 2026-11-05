@@ -19,6 +19,7 @@ from odev.common.logging import logging
 from odev.common.version import OdooVersion
 
 from odev.plugins.odev_plugin_ai.common.agent import AgentCLI
+from odev.plugins.odev_plugin_ai.common.handlers.base import which_agent
 from odev.plugins.odev_plugin_ai.common.sandbox import get_sandbox_class
 from odev.plugins.odev_plugin_ai.common.skills import ensure_skills
 
@@ -163,7 +164,8 @@ class AICommandMixin:
         :return: Whether the setup was run (the caller should then re-check support).
         :rtype: bool
         """
-        from odev.plugins.odev_plugin_ai import setup as plugin_setup  # noqa: PLC0415 - avoids an import cycle at module load
+        # Imported here: at module load it would be an import cycle.
+        from odev.plugins.odev_plugin_ai import setup as plugin_setup  # noqa: PLC0415
 
         # The profile only helps when the AppArmor user-namespace restriction is actually
         # what is blocking bwrap; for anything else (e.g. bwrap not installed) setup is a no-op.
@@ -182,7 +184,7 @@ class AICommandMixin:
 
     def _ensure_cli_installed(self, final_cli: str) -> None:
         """Hard-fail with a helpful message if the chosen CLI isn't on PATH."""
-        if shutil.which(final_cli):
+        if which_agent(final_cli):
             return
         install_hints = {
             "claude": "  npm install -g @anthropic-ai/claude-code",
@@ -204,7 +206,7 @@ class AICommandMixin:
         favorite_cli = self.config.ai.favorite_cli
 
         if not favorite_cli:
-            available = [c for c in all_clis if shutil.which(c)]
+            available = [c for c in all_clis if which_agent(c)]
             if not available:
                 logger.warning("No AI CLI tools found in PATH.")
                 favorite_cli = "claude"
