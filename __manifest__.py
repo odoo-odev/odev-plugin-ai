@@ -19,7 +19,7 @@
 #         incremented.
 # ------------------------------------------------------------------------------
 
-__version__ = "1.2.0"
+__version__ = "1.2.1"
 
 # --- Dependencies -------------------------------------------------------------
 # List other odev plugins from which this current plugin depends.
