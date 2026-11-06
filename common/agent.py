@@ -125,7 +125,8 @@ class AgentCLI(OdevFrameworkMixin):
             "PYTHONPATH": str(self.odev.path),
             "PATH": sandbox_path,
             "ODEV_NO_SSH_AGENT": "1",
-            "ODEV_SKIP_GIT_UPDATE": "1",
+            # Nobody answers prompts in the sandbox: odev assumes their defaults and works from the local clones.
+            "ODEV_NON_INTERACTIVE": "1",
             "AI_SANDBOX": "1",
         }
         if database:
