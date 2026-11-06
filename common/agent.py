@@ -201,96 +201,99 @@ class AgentCLI(OdevFrameworkMixin):
         proxy_dir = Path(tempfile.mkdtemp(prefix="odev-ai-pg-"))
         pg_data_dir = Path(tempfile.mkdtemp(prefix="odev-ai-pgdata-"))
 
-        sandbox_data = self.sandbox.prepare_sandbox_config(
-            sandbox_dirs=sandbox_dirs,
-            extra_bind_dirs=extra_bind_dirs,
-            extra_ro_bind_dirs=extra_ro_bind_dirs,
-            database=database,
-            version=version,
-        )
-        final_binds = sandbox_data["binds"]
-        active_venv_path = sandbox_data["active_venv_path"]
+        # Held until the session ends: a concurrent launch reaps every `odev-ai-*` dir older
+        # than a few minutes, and these are the live session's $HOME, /tmp and PG dirs.
+        with PostgresSandbox.claim_dirs(playground, sandbox_tmp, proxy_dir, pg_data_dir):
+            sandbox_data = self.sandbox.prepare_sandbox_config(
+                sandbox_dirs=sandbox_dirs,
+                extra_bind_dirs=extra_bind_dirs,
+                extra_ro_bind_dirs=extra_ro_bind_dirs,
+                database=database,
+                version=version,
+            )
+            final_binds = sandbox_data["binds"]
+            active_venv_path = sandbox_data["active_venv_path"]
 
-        mcp_config_path = None
-        if mcp_servers:
-            # A plain RO bind, same shape as every other directory in final_binds: no
-            # backend-specific remapping to reason about, unlike playground (overlaid
-            # onto $HOME on Linux only) or sandbox_tmp (remapped to /tmp on Linux only).
-            mcp_dir = playground / "mcp"
-            mcp_dir.mkdir(parents=True, exist_ok=True)
-            mcp_config_file = mcp_dir / "mcp-config.json"
-            mcp_config_file.write_text(json.dumps({"mcpServers": mcp_servers}))
-            final_binds.append((mcp_dir.resolve(), mcp_dir.resolve(), True, False))
-            mcp_config_path = str(mcp_config_file.resolve())
+            mcp_config_path = None
+            if mcp_servers:
+                # A plain RO bind, same shape as every other directory in final_binds: no
+                # backend-specific remapping to reason about, unlike playground (overlaid
+                # onto $HOME on Linux only) or sandbox_tmp (remapped to /tmp on Linux only).
+                mcp_dir = playground / "mcp"
+                mcp_dir.mkdir(parents=True, exist_ok=True)
+                mcp_config_file = mcp_dir / "mcp-config.json"
+                mcp_config_file.write_text(json.dumps({"mcpServers": mcp_servers}))
+                final_binds.append((mcp_dir.resolve(), mcp_dir.resolve(), True, False))
+                mcp_config_path = str(mcp_config_file.resolve())
 
-        if not cwd:
-            # Prioritize the first directory in sandbox_dirs (the main project path)
-            if sandbox_dirs:
-                main_path = Path(sandbox_dirs[0]).resolve()
-                primary_bind = next((b for b in final_binds if b[0] == main_path), None)
-                cwd = str(primary_bind[1]) if primary_bind else str(main_path)
-            else:
-                # Fallback to the first primary bind or home
-                primary_bind = next((b for b in final_binds if b[3]), None)
-                cwd = str(primary_bind[1]) if primary_bind else str(host_home)
+            if not cwd:
+                # Prioritize the first directory in sandbox_dirs (the main project path)
+                if sandbox_dirs:
+                    main_path = Path(sandbox_dirs[0]).resolve()
+                    primary_bind = next((b for b in final_binds if b[0] == main_path), None)
+                    cwd = str(primary_bind[1]) if primary_bind else str(main_path)
+                else:
+                    # Fallback to the first primary bind or home
+                    primary_bind = next((b for b in final_binds if b[3]), None)
+                    cwd = str(primary_bind[1]) if primary_bind else str(host_home)
 
-        # Candidate paths for trustedDirectories and --add-dir inclusion
-        all_candidate_paths = [str(dst) for src, dst, _, primary in final_binds if src != host_home and primary]
+            # Candidate paths for trustedDirectories and --add-dir inclusion
+            all_candidate_paths = [str(dst) for src, dst, _, primary in final_binds if src != host_home and primary]
 
-        resume = self._resolve_resume(resume, cwd)
+            resume = self._resolve_resume(resume, cwd)
 
-        # Only ever prefixed to a prompt there already is: handed to an agent started
-        # with nothing to do, the note becomes the first thing it is asked, and a run
-        # meant to open a conversation opens with the agent answering its own sandbox
-        # description instead of waiting. It used to be assembled after the command that
-        # carries the prompt was built, so it reached no agent at all.
-        if prompt:
-            prompt = self._environment_note(database) + prompt
+            # Only ever prefixed to a prompt there already is: handed to an agent started
+            # with nothing to do, the note becomes the first thing it is asked, and a run
+            # meant to open a conversation opens with the agent answering its own sandbox
+            # description instead of waiting. It used to be assembled after the command that
+            # carries the prompt was built, so it reached no agent at all.
+            if prompt:
+                prompt = self._environment_note(database) + prompt
 
-        agent_cmd, agent_dirs, agent_files = self._get_agent_setup(
-            prompt, resume, all_candidate_paths, host_home, tuple(mcp_servers or ())
-        )
+            agent_cmd, agent_dirs, agent_files = self._get_agent_setup(
+                prompt, resume, all_candidate_paths, host_home, tuple(mcp_servers or ())
+            )
 
-        if not agent_cmd:
-            return False
+            if not agent_cmd:
+                return False
 
-        agent_cmd.extend(self.handler.get_mcp_config_args(mcp_config_path))
+            agent_cmd.extend(self.handler.get_mcp_config_args(mcp_config_path))
 
-        sandbox_path = self._build_sandbox_path(active_venv_path, host_home)
-        env = self._build_env(host_home, sandbox_path, database)
-        secrets = self._setup_github_token()
+            sandbox_path = self._build_sandbox_path(active_venv_path, host_home)
+            env = self._build_env(host_home, sandbox_path, database)
+            secrets = self._setup_github_token()
 
-        # Set up ephemeral PG (or pass-through to host PG) before the agent runs
-        pg_sandbox = PostgresSandbox(headless=self.headless)
-        pg_process = pg_sandbox.setup(
-            database=database,
-            proxy_dir=proxy_dir,
-            pg_data_dir=pg_data_dir,
-            ephemeral=ephemeral_pg,
-        )
+            # Set up ephemeral PG (or pass-through to host PG) before the agent runs
+            pg_sandbox = PostgresSandbox(headless=self.headless)
+            pg_process = pg_sandbox.setup(
+                database=database,
+                proxy_dir=proxy_dir,
+                pg_data_dir=pg_data_dir,
+                ephemeral=ephemeral_pg,
+            )
 
-        spec = ExecutionSpec(
-            agent_cmd=agent_cmd,
-            final_binds=final_binds,
-            agent_dirs=agent_dirs,
-            agent_files=agent_files,
-            env=env,
-            secrets=secrets,
-            cwd=cwd,
-            playground=playground,
-            sandbox_tmp=sandbox_tmp,
-            proxy_dir=proxy_dir,
-            pg_data_dir=pg_data_dir,
-            database=database,
-            db_user=db_user,
-            pg_process=pg_process,
-            active_venv_path=active_venv_path,
-            odoo_filestore=host_home / ".local" / "share" / "Odoo",
-            primary_dirs=[Path(d) for d in sandbox_dirs],
-            mcp_servers=mcp_servers,
-        )
+            spec = ExecutionSpec(
+                agent_cmd=agent_cmd,
+                final_binds=final_binds,
+                agent_dirs=agent_dirs,
+                agent_files=agent_files,
+                env=env,
+                secrets=secrets,
+                cwd=cwd,
+                playground=playground,
+                sandbox_tmp=sandbox_tmp,
+                proxy_dir=proxy_dir,
+                pg_data_dir=pg_data_dir,
+                database=database,
+                db_user=db_user,
+                pg_process=pg_process,
+                active_venv_path=active_venv_path,
+                odoo_filestore=host_home / ".local" / "share" / "Odoo",
+                primary_dirs=[Path(d) for d in sandbox_dirs],
+                mcp_servers=mcp_servers,
+            )
 
-        return self.sandbox.execute(spec)
+            return self.sandbox.execute(spec)
 
     @staticmethod
     def _environment_note(database: str | None) -> str:
