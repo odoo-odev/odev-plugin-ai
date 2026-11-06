@@ -1,3 +1,5 @@
+import contextlib
+import fcntl
 import os
 import re
 import shutil
@@ -5,6 +7,7 @@ import signal
 import subprocess
 import tempfile
 import time
+from collections.abc import Iterator
 from pathlib import Path
 
 from odev.common.logging import logging
@@ -36,16 +39,13 @@ class PostgresSandbox(OdevFrameworkMixin):
         directories may linger in `/tmp` / `$TMPDIR`. This routine kills the
         postgres process group (when applicable) and removes the dirs. Only
         dirs older than `_ORPHAN_MIN_AGE_SECONDS` are touched to avoid racing
-        with a concurrently-running `odev ai`.
+        with a concurrently-running `odev ai`, and dirs a live run still holds
+        (see `claim_dirs`) are skipped whatever their age: a session that has
+        run longer than that threshold is not an orphan.
         """
-        scan_dirs: list[Path] = []
-        if v := os.environ.get("TMPDIR"):
-            scan_dirs.append(Path(v))
-        scan_dirs.extend([Path("/tmp"), Path(tempfile.gettempdir())])
-
         cutoff = time.time() - _ORPHAN_MIN_AGE_SECONDS
         seen: set[Path] = set()
-        for d in scan_dirs:
+        for d in cls._scan_dirs():
             try:
                 resolved = d.resolve()
             except OSError:
@@ -65,7 +65,49 @@ class PostgresSandbox(OdevFrameworkMixin):
                         continue
                 except OSError:
                     continue
+                if cls._is_claimed(entry):
+                    continue
                 cls._reap_orphan_dir(entry)
+
+    @staticmethod
+    def _scan_dirs() -> list[Path]:
+        """Return the temporary roots `odev ai` may have created its dirs in."""
+        scan_dirs: list[Path] = []
+        if v := os.environ.get("TMPDIR"):
+            scan_dirs.append(Path(v))
+        scan_dirs.extend([Path("/tmp"), Path(tempfile.gettempdir())])
+        return scan_dirs
+
+    @staticmethod
+    @contextlib.contextmanager
+    def claim_dirs(*dirs: Path) -> Iterator[None]:
+        """Mark a run's temporary dirs as in use for as long as the context lasts.
+
+        Each dir is held under an exclusive `flock` that `cleanup_orphans` probes
+        before reaping. The kernel drops the lock with the process, so the dirs of
+        a run that crashed or was killed become reapable again on their own.
+        """
+        with contextlib.ExitStack() as stack:
+            for directory in dirs:
+                fd = os.open(directory, os.O_RDONLY)
+                stack.callback(os.close, fd)
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            yield
+
+    @staticmethod
+    def _is_claimed(directory: Path) -> bool:
+        """Return whether a live `odev ai` run holds `directory` (see `claim_dirs`)."""
+        try:
+            fd = os.open(directory, os.O_RDONLY)
+        except OSError:
+            return False
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return True
+        finally:
+            os.close(fd)
+        return False
 
     @staticmethod
     def _reap_orphan_dir(orphan: Path) -> None:
