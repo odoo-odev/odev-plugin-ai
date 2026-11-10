@@ -6,6 +6,7 @@ hands off to the configured shell via `bash.run` for raw-TTY support.
 """
 
 import os
+import re
 import shlex
 import shutil
 import subprocess
@@ -17,10 +18,65 @@ from odev.common.browsers import Chrome
 from odev.common.console import console
 from odev.common.logging import logging
 
+from odev.plugins.odev_plugin_ai.common.handlers.base import WRAPPER_MAX_SIZE
+
 from .base import ExecutionSpec, Sandbox
 
 
 logger = logging.getLogger(__name__)
+
+WRAPPER_EXEC_PATTERN = re.compile(rb"^\s*exec\s+[\"']?(/[^\s\"']+)", re.MULTILINE)
+"""The absolute path a launcher script hands over to with `exec`.
+
+Distribution packages may install an agent outside of `/usr` and put a launcher on PATH
+instead, e.g. Arch's `claude-code`: `/usr/bin/claude` runs `exec /opt/claude-code/bin/claude`.
+"""
+
+SANDBOX_VISIBLE_ROOTS = (Path("/usr"),)
+"""Host directories the sandbox already exposes as they are, whatever is installed under them."""
+
+
+def agent_install_paths(executable: str, host_home: Path) -> list[Path]:
+    """Return the host paths the agent runs from that the sandbox does not expose already.
+
+    The agent is reached through a symbolic link, or a launcher script, on PATH; the program
+    they lead to lives wherever its package put it, often `/opt`, which is not part of the
+    sandbox. Its installation directory, the one above `bin` when it sits in one, has to be
+    bound for the agent to start at all; the program alone when that directory is a top-level
+    one. Paths under the home are left out: the home is replaced by the playground, and what of
+    it the agent needs is bound on purpose.
+
+    :param executable: The command the sandbox runs, a name looked up on PATH or a path.
+    :param host_home: The home directory of the user on the host.
+    :return: The paths to bind read-only, in the order they were found.
+    """
+    found = shutil.which(executable)
+    if found is None:
+        return []
+
+    targets = [Path(found).resolve()]
+    try:
+        if targets[0].stat().st_size <= WRAPPER_MAX_SIZE:
+            content = targets[0].read_bytes()
+            if content.startswith(b"#!"):
+                targets += [Path(os.fsdecode(match)).resolve() for match in WRAPPER_EXEC_PATTERN.findall(content)]
+    except OSError as error:
+        logger.debug(f"Could not read the agent launcher {targets[0]}: {error}")
+
+    paths: list[Path] = []
+    for target in targets:
+        # Never a top-level directory such as `/opt` as a whole, only what belongs to the agent
+        candidates = (target.parent.parent if target.parent.name == "bin" else None, target.parent, target)
+        path = next((candidate for candidate in candidates if candidate and len(candidate.parts) > 2), None)  # noqa: PLR2004
+        if (
+            path is not None
+            and path not in paths
+            and path.exists()
+            and not path.is_relative_to(host_home)
+            and not any(path.is_relative_to(root) for root in SANDBOX_VISIBLE_ROOTS)
+        ):
+            paths.append(path)
+    return paths
 
 
 def _check_bwrap_support() -> tuple[bool, str]:
@@ -245,6 +301,12 @@ class BwrapSandbox(Sandbox):
             ]
         )
 
+    def _add_agent_install_binds(self, cmd: list[str], executable: str, host_home: Path) -> None:
+        """Expose the installation of the agent program, when the sandbox does not already."""
+        for path in agent_install_paths(executable, host_home):
+            logger.debug(f"Binding the installation of {self.cli} at {path}")
+            cmd.extend(["--ro-bind-try", str(path), str(path)])
+
     def _apply_final_bindings(  # noqa: PLR0913 - carries the full bind context, like its siblings
         self,
         cmd: list[str],
@@ -296,7 +358,7 @@ class BwrapSandbox(Sandbox):
 
     # --- main entry ----------------------------------------------------------
 
-    def execute(self, spec: ExecutionSpec) -> bool:  # noqa: PLR0912 - sequential argv assembly, splitting it would obscure the isolation logic
+    def execute(self, spec: ExecutionSpec) -> bool:  # noqa: PLR0912, PLR0915 - sequential argv assembly, splitting it would obscure the isolation logic
         """Translate the spec into a bwrap argv and execute the agent."""
         host_home = Path.home().resolve()
 
@@ -358,6 +420,7 @@ class BwrapSandbox(Sandbox):
         if spec.pg_process is not None:
             self._add_postgres_socket_binds(cmd, spec.proxy_dir)
 
+        self._add_agent_install_binds(cmd, spec.agent_cmd[0], host_home)
         self._apply_final_bindings(cmd, spec.agent_dirs, spec.agent_files, spec.final_binds, host_home, spec.playground)
         self._prepare_agent_config(
             spec.playground,
