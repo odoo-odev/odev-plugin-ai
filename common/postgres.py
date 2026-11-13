@@ -21,6 +21,9 @@ _ORPHAN_DIR_PREFIX = "odev-ai-"
 # from killing each other. A real launch passes this threshold within a minute.
 _ORPHAN_MIN_AGE_SECONDS = 5 * 60
 
+# `odev-ai-<pid>-...`: dirs named after a running `odev ai` process are never orphans, whatever their age.
+_OWNER_PID = re.compile(rf"^{_ORPHAN_DIR_PREFIX}(\d+)-")
+
 
 class PostgresSandbox(OdevFrameworkMixin):
     """Manages an ephemeral PostgreSQL sandbox database."""
@@ -60,12 +63,27 @@ class PostgresSandbox(OdevFrameworkMixin):
             for entry in entries:
                 if not entry.is_dir() or not entry.name.startswith(_ORPHAN_DIR_PREFIX):
                     continue
+                if cls._owner_alive(entry.name):
+                    continue
                 try:
                     if entry.stat().st_mtime > cutoff:
                         continue
                 except OSError:
                     continue
                 cls._reap_orphan_dir(entry)
+
+    @staticmethod
+    def _owner_alive(name: str) -> bool:
+        match = _OWNER_PID.match(name)
+        if not match:
+            return False
+        try:
+            os.kill(int(match.group(1)), 0)
+        except ProcessLookupError:
+            return False
+        except PermissionError:
+            pass
+        return True
 
     @staticmethod
     def _reap_orphan_dir(orphan: Path) -> None:
