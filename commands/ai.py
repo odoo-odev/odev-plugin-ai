@@ -82,6 +82,10 @@ class AICommand(DatabaseCommand, AICommandMixin):
         # Appended after the typed prompt, which reads as instructions on top of the
         # pasted content: a developer pastes a task description and types how to treat it.
         if self.args.paste:
+            # Wait for the copy before reading: the clipboard is read once, now, so
+            # whatever is on it has to be there first. Pressing Enter is the signal that
+            # it is - the developer copies the description, comes back and hits Enter.
+            self.console.input("Copy what you want to send, then press Enter to read it from the clipboard...")
             try:
                 pasted = read_pasted_prompt()
             except PasteError as error:
