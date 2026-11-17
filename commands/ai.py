@@ -7,6 +7,7 @@ from odev.common.commands import DatabaseCommand
 from odev.common.logging import logging
 
 from odev.plugins.odev_plugin_ai.common.mixins import AICommandMixin
+from odev.plugins.odev_plugin_ai.common.paste import PasteError, read_pasted_prompt
 
 
 logger = logging.getLogger(__name__)
@@ -34,6 +35,13 @@ class AICommand(DatabaseCommand, AICommandMixin):
     prompt = args.String(
         description="The prompt to send to the AI agent. If multiple words are provided, they will be joined.",
         nargs="*",
+    )
+
+    paste = args.Flag(
+        aliases=["--paste"],
+        description="Read the prompt from the clipboard (its HTML, with image links, kept) instead of "
+        "typing it. Any prompt typed on the command line is kept and the pasted content added after it.",
+        default=False,
     )
 
     def infer_database_instance(self):
@@ -70,6 +78,15 @@ class AICommand(DatabaseCommand, AICommandMixin):
                     f"{resume!r} does not look like a session id; pass `--resume` on its own for the "
                     "latest session, and put the prompt before it."
                 )
+
+        # Appended after the typed prompt, which reads as instructions on top of the
+        # pasted content: a developer pastes a task description and types how to treat it.
+        if self.args.paste:
+            try:
+                pasted = read_pasted_prompt()
+            except PasteError as error:
+                raise self.error(str(error)) from error
+            prompt_parts.append(pasted)
 
         self.run_ai_agent(
             prompt=" ".join(prompt_parts),
