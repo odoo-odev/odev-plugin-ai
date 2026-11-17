@@ -3,9 +3,10 @@
 ``odev ai --paste`` hands the agent whatever was copied - typically a task description
 pasted straight out of the browser. The HTML flavour of the clipboard is preferred over
 plain text: it is what keeps the ``<img>`` links of a description, which a plain-text
-copy has already lost. The markup is turned into text, inline ``data:`` screenshots are
-dropped (they are no link to fetch and a single one overruns the command line), and the
-image urls are kept inline so the agent can load them itself.
+copy has already lost. The markup is turned into text, with the image urls kept inline as
+links for the agent to load on its own. Inline ``data:`` screenshots are dropped: they are
+no link to fetch, and a single base64 payload overruns the length a single command-line
+argument is allowed (the prompt reaches the agent on its argv).
 """
 
 from __future__ import annotations
@@ -23,14 +24,10 @@ logger = logging.getLogger(__name__)
 HTML_TAG = re.compile(r"<[a-zA-Z/][^>]*>")
 """Enough to tell a clipboard that is markup from one that is plain text."""
 
-# An ``<img>`` whose src is a base64 ``data:`` payload rather than a url. A pasted prompt
-# keeps its images as links for the agent to fetch; an inline data URI is no link, and a
-# single screenshot of one blows past the 128kB the kernel allows a command line - so
-# those are dropped rather than carried into the prompt.
+# An ``<img>`` whose src is a base64 ``data:`` payload rather than a url. A url image is
+# kept as a link; only these are dropped, because one base64 screenshot blows past the
+# ~128kB the kernel allows a single command-line argument and the prompt rides on argv.
 DATA_URI_IMG = re.compile(r"""<img\b[^>]*\bsrc\s*=\s*["']data:[^"']*["'][^>]*>""", re.IGNORECASE)
-
-# The image links left in a parsed (markdown) prompt, as ``![alt](url)``.
-MARKDOWN_IMAGE = re.compile(r"!\[[^\]]*\]\(\s*(\S+?)\s*\)")
 
 
 class PasteError(Exception):
@@ -95,7 +92,7 @@ def _to_text(content: str) -> str:
     Plain text is returned as it stands: run through html2text it would come back with
     its ``<``, ``&`` and ``*`` read as markup. HTML has its inline ``data:`` images
     dropped first, then is turned into markdown text with the remaining ``<img>`` links
-    kept - there is nothing fetched behind a paste, so the agent loads them itself.
+    kept - the agent loads them on its own.
     """
     if not HTML_TAG.search(content):
         return content.strip()
@@ -104,35 +101,22 @@ def _to_text(content: str) -> str:
 
     h = html2text.HTML2Text()
     h.ignore_links = True
-    # Keep the images as links: a paste has no task behind it to fetch them from, so the
-    # urls stay in the text for the agent to load.
+    # Keep the images as links: the url images stay in the text as ``![alt](url)`` for
+    # the agent to load by itself.
     h.ignore_images = False
     return h.handle(content).strip()
-
-
-def _image_links(text: str) -> list[str]:
-    """The image urls kept inline in the parsed prompt, for the agent to load."""
-    return MARKDOWN_IMAGE.findall(text)
 
 
 def read_pasted_prompt() -> str:
     """Return the clipboard, parsed into a prompt the agent can read.
 
-    The HTML flavour is preferred so image links survive; the text is returned with its
-    url images kept inline, and a closing note tells the agent to load each one (a pasted
-    prompt has nothing fetched behind it). Raises :class:`PasteError` when the clipboard
-    cannot be read or holds nothing.
+    The HTML flavour is preferred so image links survive; the markup is turned into text
+    with its url images kept inline as links, for the agent to load by itself. Raises
+    :class:`PasteError` when the clipboard cannot be read or holds nothing.
     """
     text = _to_text(_read_clipboard())
 
     if not text.strip():
         raise PasteError("The clipboard holds nothing to send.")
-
-    if links := _image_links(text):
-        joined = ", ".join(f"`{link}`" for link in links)
-        text += (
-            f"\n\nThe text above keeps {len(links)} image(s) as link(s): {joined}. "
-            "Load each one and read it as the picture the text points to there, where the link stands."
-        )
 
     return text
