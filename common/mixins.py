@@ -240,46 +240,14 @@ class AICommandMixin:
 
         return chosen_cli or favorite_cli or "claude"
 
-    def _resolve_model(self, final_cli: str) -> str:
-        """Return the model to use for the given CLI, asking for a favorite the first time around."""
-        chosen_model = self.args.model
-        favorite_model = self.config.ai.get_favorite_model(final_cli)
-
-        if not chosen_model and not favorite_model:
-            if self.args.headless:
-                favorite_model = "auto"
-            else:
-                choices = [("auto", "auto"), ("other", "Other (type it manually)")]
-
-                favorite_model = self.console.select(
-                    f"Which model do you want to use for '{final_cli}' as your favorite?",
-                    choices=choices,
-                )
-                if favorite_model == "other":
-                    favorite_model = self.console.input("Please enter the model name:")
-
-            self.config.ai.set_favorite_model(final_cli, favorite_model)
-            logger.info(f"Setting '{favorite_model}' as your favorite model for {final_cli}.")
-
-        if (
-            chosen_model
-            and favorite_model
-            and chosen_model != favorite_model
-            and not self.args.headless
-            and self.console.confirm(
-                f"Do you want to set '{chosen_model}' as your new favorite model for {final_cli}?",
-                default=False,
-            )
-        ):
-            self.config.ai.set_favorite_model(final_cli, chosen_model)
-            favorite_model = chosen_model
-
-        return chosen_model or favorite_model or "auto"
+    def _resolve_model(self) -> str:
+        """Return the model to use, taken from the --model argument or defaulting to 'auto'."""
+        return self.args.model or "auto"
 
     def get_ai_agent(self) -> AgentCLI:
         """Initialize and return an AgentCLI instance based on command arguments.
 
-        Handles favorite CLI selection and CLI-specific model favorites.
+        Handles favorite CLI selection; the model comes from the --model argument.
         """
         self._ensure_sandbox_supported()
 
@@ -288,7 +256,7 @@ class AICommandMixin:
 
         final_cli = self._resolve_cli()
         self._ensure_cli_installed(final_cli)
-        final_model = self._resolve_model(final_cli)
+        final_model = self._resolve_model()
 
         return AgentCLI(
             cli=final_cli,

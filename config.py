@@ -28,14 +28,6 @@ class AiSection(Section):
     def favorite_cli(self, value: str):
         self.set("favorite_cli", value)
 
-    def get_favorite_model(self, cli: str) -> str | None:
-        """Return the favorite model specifically for the given CLI agent."""
-        return self.get(f"favorite_model_{cli}")
-
-    def set_favorite_model(self, cli: str, model: str):
-        """Set the favorite model specifically for the given CLI agent."""
-        self.set(f"favorite_model_{cli}", model)
-
 
 class SkillsSection(Section):
     _name = "skills"
