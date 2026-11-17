@@ -296,16 +296,34 @@ class AgentCLI(OdevFrameworkMixin):
     def _environment_note(database: str | None) -> str:
         """Return what the agent has to know about the sandbox it was started in."""
         if database:
-            return (
+            environment = (
                 f"(Environment: You have been granted access to a private, isolated PostgreSQL database "
                 f"named '{database}'. If the host database '{database}' exists, it has been cloned into "
                 "this ephemeral cluster. Otherwise it is an empty database. You can safely modify it as "
                 "it does not affect the live host data. Use 'psql' to work directly with it.)\n\n"
             )
+        else:
+            environment = (
+                "(Environment: You have been granted access to a private, isolated filesystem sandbox. "
+                "No database access has been provided for this session.)\n\n"
+            )
 
+        return environment + AgentCLI._tools_note()
+
+    @staticmethod
+    def _tools_note() -> str:
+        """Return the tools the sandbox hands the agent that are not obvious from the box.
+
+        Said once, in the note every prompt opens with, rather than left for each command
+        that assembles a prompt to repeat: the tools live here, where every AI command can
+        reach them, so the explanation does too.
+        """
         return (
-            "(Environment: You have been granted access to a private, isolated filesystem sandbox. "
-            "No database access has been provided for this session.)\n\n"
+            "(Tools: An Excalidraw board linked from the task is a live document, not a picture, and the "
+            "prompt cannot carry it. Export the one you need to a readable SVG - every label of the board "
+            "stays text you can read straight out of the markup - with `odev excalidraw-export <url> "
+            "--path <dir>`, then read the file it writes. A board the command reports as private cannot be "
+            "exported from here; carry on without it.)\n\n"
         )
 
     def _resolve_resume(self, resume: str | None, cwd: str | None) -> str | None:
