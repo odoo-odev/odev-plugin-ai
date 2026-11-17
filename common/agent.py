@@ -363,13 +363,35 @@ class AgentCLI(OdevFrameworkMixin):
         token = self._get_github_token()
         return [("GITHUB_TOKEN", token), ("GH_TOKEN", token)] if token else []
 
+    @staticmethod
+    def _github_token_rejected(token: str) -> bool:
+        """Whether GitHub refuses the token (expired or revoked).
+
+        Only a 401 counts: offline, or with GitHub down, the token is kept.
+        """
+        try:
+            result = subprocess.run(
+                ["gh", "api", "user", "--silent"],  # noqa: S607 - only called once gh was found on PATH
+                capture_output=True,
+                text=True,
+                timeout=10,
+                check=False,
+                env={**os.environ, "GH_TOKEN": token},
+            )
+        except (OSError, subprocess.SubprocessError):
+            return False
+        return result.returncode != 0 and "HTTP 401" in result.stderr
+
     def _get_github_token(self) -> str | None:
         """Find a GitHub token already set up, or offer to configure one."""
         try:
             if token := self.store.secrets.get(
                 GITHUB_DOMAIN, scope="api", fields=["password"], ask_missing=False
             ).password:
-                return token
+                if not self._github_token_rejected(token):
+                    return token
+                logger.warning("The stored GitHub token has expired or was revoked, it is forgotten.")
+                self.store.secrets.invalidate(GITHUB_DOMAIN, scope="api")
         except Exception as e:  # noqa: BLE001 - the secret store may raise anything, the token is optional
             logger.debug(f"Could not retrieve GitHub secret: {e}")
 
@@ -399,8 +421,14 @@ class AgentCLI(OdevFrameworkMixin):
             return None
 
         logger.info(
-            """Create a token on https://github.com/settings/tokens, giving it only access to the repositories
-            the agent should work on. It is stored encrypted by odev."""
+            """Create a fine-grained personal access token (github_pat_...) on
+            https://github.com/settings/personal-access-tokens/new with:
+            - Expiration: a short one (e.g. 30 days), odev asks for a new token once it has expired;
+            - Resource owner: the organization of the repositories (it may need the organization's approval);
+            - Repository access: only the repositories the agent should work on;
+            - Permissions: Contents (read and write) and Pull requests (read and write).
+            Avoid classic tokens (ghp_...): they give access to every repository of your account.
+            The token is stored encrypted by odev."""
         )
         try:
             return self.store.secrets.get(
