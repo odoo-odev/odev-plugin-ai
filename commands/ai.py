@@ -7,6 +7,7 @@ from odev.common.commands import DatabaseCommand
 from odev.common.logging import logging
 
 from odev.plugins.odev_plugin_ai.common.mixins import AICommandMixin
+from odev.plugins.odev_plugin_ai.common.paste import PasteError, read_pasted_prompt
 
 
 logger = logging.getLogger(__name__)
@@ -35,6 +36,22 @@ class AICommand(DatabaseCommand, AICommandMixin):
         description="The prompt to send to the AI agent. If multiple words are provided, they will be joined.",
         nargs="*",
     )
+
+    paste = args.Flag(
+        aliases=["--paste"],
+        description="Read the prompt from the clipboard (its HTML, with image links, kept) instead of "
+        "typing it. Any prompt typed on the command line is kept and the pasted content added after it.",
+        default=False,
+    )
+
+    prompt_preamble: str = ""
+    """Framing prepended to the prompt, ahead of the typed and pasted task.
+
+    Empty on `ai` itself; the `scaffold` and `analysis` aliases set it to tell the agent
+    what kind of task this is and which skill to work by, before the task they read from
+    the clipboard. It is a class attribute rather than an argument: a subcommand decides
+    it, the user does not type it.
+    """
 
     def infer_database_instance(self):
         try:
@@ -71,7 +88,27 @@ class AICommand(DatabaseCommand, AICommandMixin):
                     "latest session, and put the prompt before it."
                 )
 
+        # Appended after the typed prompt, which reads as instructions on top of the
+        # pasted content: a developer pastes a task description and types how to treat it.
+        if self.args.paste:
+            # Wait for the copy before reading: the clipboard is read once, now, so
+            # whatever is on it has to be there first. Pressing Enter is the signal that
+            # it is - the developer copies the description, comes back and hits Enter.
+            self.console.input("Copy what you want to send, then press Enter to read it from the clipboard...")
+            try:
+                pasted = read_pasted_prompt()
+            except PasteError as error:
+                raise self.error(str(error)) from error
+            prompt_parts.append(pasted)
+
+        prompt = " ".join(prompt_parts)
+
+        # The preamble leads: it frames the task and names the skill to work by, so it
+        # reads as the instructions the typed and pasted content are then handed to.
+        if self.prompt_preamble:
+            prompt = f"{self.prompt_preamble}\n\n{prompt}".strip()
+
         self.run_ai_agent(
-            prompt=" ".join(prompt_parts),
+            prompt=prompt,
             database=database_name,
         )
