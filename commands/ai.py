@@ -44,6 +44,15 @@ class AICommand(DatabaseCommand, AICommandMixin):
         default=False,
     )
 
+    prompt_preamble: str = ""
+    """Framing prepended to the prompt, ahead of the typed and pasted task.
+
+    Empty on `ai` itself; the `scaffold` and `analysis` aliases set it to tell the agent
+    what kind of task this is and which skill to work by, before the task they read from
+    the clipboard. It is a class attribute rather than an argument: a subcommand decides
+    it, the user does not type it.
+    """
+
     def infer_database_instance(self):
         try:
             return super().infer_database_instance()
@@ -92,7 +101,14 @@ class AICommand(DatabaseCommand, AICommandMixin):
                 raise self.error(str(error)) from error
             prompt_parts.append(pasted)
 
+        prompt = " ".join(prompt_parts)
+
+        # The preamble leads: it frames the task and names the skill to work by, so it
+        # reads as the instructions the typed and pasted content are then handed to.
+        if self.prompt_preamble:
+            prompt = f"{self.prompt_preamble}\n\n{prompt}".strip()
+
         self.run_ai_agent(
-            prompt=" ".join(prompt_parts),
+            prompt=prompt,
             database=database_name,
         )
