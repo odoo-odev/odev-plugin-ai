@@ -149,7 +149,7 @@ class BwrapSandbox(Sandbox):
             cmd.extend(["--ro-bind-try", "/opt/google/chrome", "/opt/google/chrome"])
         cmd.extend(
             [
-                "--ro-bind",
+                "--ro-bind-try",
                 "/run/systemd/resolve",
                 "/run/systemd/resolve",
                 "--ro-bind",
@@ -167,7 +167,7 @@ class BwrapSandbox(Sandbox):
                 "--ro-bind-try",
                 "/etc/crypto-policies",
                 "/etc/crypto-policies",
-                "--ro-bind",
+                "--ro-bind-try",
                 "/etc/alternatives",
                 "/etc/alternatives",
                 "--ro-bind-try",
