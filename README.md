@@ -85,6 +85,7 @@ These options are shared by every AI command above (and by the commands that oth
 | `--resume [<id>]` | Resume a previous session, by id or `latest`. Bare `--resume` resumes the latest session of the working directory. |
 | `-E`, `--edit` | Open the prompt in `$EDITOR` before sending it; save it empty to abort the run. |
 | `-d`, `--dirs <dirs>` | Comma-separated list of extra directories to mount read-write in the sandbox. |
+| `--sandbox` | Force the agent to run in a throwaway playground instead of the current directory. |
 | `-V`, `--version <version>` | Launch the agent in the worktree of a specific Odoo version (e.g. `17.0`, `saas-17.2`, `master`) instead of a database's repository. The worktree is created and updated automatically, and the version's own skills are loaded. |
 
 ## Skills

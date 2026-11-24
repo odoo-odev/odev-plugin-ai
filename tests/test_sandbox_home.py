@@ -29,14 +29,30 @@ def home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     home = tmp_path / "home"
     (home / "odev" / ".git").mkdir(parents=True)
     (home / "project" / ".git").mkdir(parents=True)
-    (home / "Downloads").mkdir()
+    # Localized XDG user dirs, as a French desktop writes them: the folder names live
+    # only in this config, never hardcoded in the plugin.
+    (home / "Téléchargements").mkdir()
+    (home / "Documents" / "scratch").mkdir(parents=True)
+    config = home / ".config"
+    config.mkdir()
+    (config / "user-dirs.dirs").write_text(
+        'XDG_DOWNLOAD_DIR="$HOME/Téléchargements"\n'
+        'XDG_DOCUMENTS_DIR="$HOME/Documents"\n'
+        'XDG_DESKTOP_DIR="$HOME"\n',  # disabled dir: points at home, must be ignored
+        encoding="utf-8",
+    )
     monkeypatch.setenv("HOME", str(home))
+    monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
     return home
 
 
-def _sandbox_dirs(home: Path, cwd: Path) -> list[str]:
+def _sandbox_dirs(home: Path, cwd: Path, *, sandbox: bool = False) -> list[str]:
     """Resolve the sandbox directories of a run started from ``cwd``."""
-    command = SimpleNamespace(odev=SimpleNamespace(home_path=home / "odev"), sandbox_repository=None)
+    command = SimpleNamespace(
+        odev=SimpleNamespace(home_path=home / "odev"),
+        sandbox_repository=None,
+        args=SimpleNamespace(sandbox=sandbox),
+    )
     return AICommandMixin._resolve_sandbox_dirs(command, cwd=cwd)
 
 
@@ -53,8 +69,35 @@ def test_other_repository_is_used(home: Path) -> None:
     assert _sandbox_dirs(home, home / "project") == [str(home / "project")]
 
 
-def test_folder_outside_git_uses_playground(home: Path) -> None:
-    assert _sandbox_dirs(home, home / "Downloads") == [str(home / "odev" / "playground")]
+def test_home_root_folder_uses_playground(home: Path) -> None:
+    # A top-level personal folder, named only in user-dirs.dirs (here, localized).
+    assert _sandbox_dirs(home, home / "Téléchargements") == [str(home / "odev" / "playground")]
+
+
+def test_home_itself_uses_playground(home: Path) -> None:
+    assert _sandbox_dirs(home, home) == [str(home / "odev" / "playground")]
+
+
+def test_plain_folder_inside_a_root_folder_is_used(home: Path) -> None:
+    # The change: a non-git folder deeper than a top-level home folder opens in place,
+    # rather than being redirected to the playground.
+    assert _sandbox_dirs(home, home / "Documents" / "scratch") == [str(home / "Documents" / "scratch")]
+
+
+def test_sandbox_flag_forces_the_playground(home: Path) -> None:
+    assert _sandbox_dirs(home, home / "project", sandbox=True) == [str(home / "odev" / "playground")]
+
+
+def test_without_xdg_config_only_home_is_guarded(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    bare = tmp_path / "bare"
+    (bare / "odev").mkdir(parents=True)
+    (bare / "Downloads").mkdir()
+    monkeypatch.setenv("HOME", str(bare))
+    monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
+    # No user-dirs.dirs: the names are unknown, so a top-level folder opens in place...
+    assert _sandbox_dirs(bare, bare / "Downloads") == [str(bare / "Downloads")]
+    # ...but the home directory itself is still guarded.
+    assert _sandbox_dirs(bare, bare) == [str(bare / "odev" / "playground")]
 
 
 # --- note to the agent -----------------------------------------------------------

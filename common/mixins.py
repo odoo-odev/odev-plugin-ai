@@ -9,6 +9,8 @@ if TYPE_CHECKING:
     from odev.common.console import Console
     from odev.common.odev import Odev
 
+import os
+import re
 import shutil
 from pathlib import Path
 
@@ -25,6 +27,47 @@ from odev.plugins.odev_plugin_ai.common.skills import ensure_skills
 
 
 logger = logging.getLogger(__name__)
+
+_USER_DIR_LINE = re.compile(r'^\s*XDG_[A-Z_]+_DIR\s*=\s*"(?P<path>.*)"\s*$')
+"""A line of the freedesktop ``user-dirs.dirs`` file, e.g. ``XDG_DOWNLOAD_DIR="$HOME/..."``."""
+
+
+def home_root_folders(home: Path) -> set[Path]:
+    """Return the personal top-level folders sitting directly under ``home``.
+
+    These are the XDG user directories a desktop sets up - Documents, Downloads and the
+    like. Their names are read from the freedesktop ``user-dirs.dirs`` config rather than
+    hardcoded, so they are whatever the distribution and the user's language made them
+    (``Téléchargements``, ``Images``, ``Bureau``...). An agent launched straight in one of
+    them would be handed the whole folder, so the run falls back to the playground there;
+    anything deeper opens in place, exposing only that subfolder.
+
+    When the config is absent (no desktop, a fresh home) there are no known personal
+    folders to name, and only the home directory itself is guarded.
+    """
+    config_home = Path(os.environ.get("XDG_CONFIG_HOME") or home / ".config")
+    try:
+        lines = (config_home / "user-dirs.dirs").read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return set()
+
+    folders: set[Path] = set()
+    for line in lines:
+        match = _USER_DIR_LINE.match(line)
+        if not match:
+            continue
+        # Values are written relative to $HOME; an unset directory points at $HOME itself.
+        expanded = match.group("path").replace("${HOME}", str(home)).replace("$HOME", str(home))
+        try:
+            path = Path(expanded).resolve()
+        except OSError:
+            continue
+        # Keep only folders directly under home: a user dir pointing elsewhere - or at
+        # home itself, meaning disabled - is not a top-level personal folder to guard.
+        if path != home and path.parent == home:
+            folders.add(path)
+    return folders
+
 
 GUIDELINES_SKILL = "odoo_coding_guidelines"
 """Skill carrying how Odoo code is written: module layout, per-language conventions, and
@@ -119,6 +162,12 @@ class AICommandMixin:
         aliases=["-d", "--dirs"],
         description="Comma-separated list of extra directories to include in the sandbox (read-write).",
         default=[],
+    )
+
+    sandbox = args.Flag(
+        aliases=["--sandbox"],
+        description="Force the agent to run in a throwaway playground instead of the current directory.",
+        default=False,
     )
 
     version = args.String(
@@ -417,9 +466,11 @@ class AICommandMixin:
         3. :attr:`sandbox_repository`, the checkout of the code the run is about, which
            a command resolved for itself - the only code a hosted database can offer,
            running nowhere local;
-        4. the directory the command was called from, when it is inside a repository
-           other than odev's home directory;
-        5. the playground, which exposes no personal folder to the agent.
+        4. the directory the command was called from, as long as it is a real piece of
+           work rather than the home directory itself, one of its standard personal
+           folders (Documents, Downloads, ...) or odev's own home;
+        5. the playground, which exposes no personal folder to the agent - also forced by
+           ``--sandbox``.
         """
         if version:
             normalized_version = str(OdooVersion(version))
@@ -443,32 +494,22 @@ class AICommandMixin:
 
         target_dir = (cwd or Path.cwd()).resolve()
         home = Path.home().resolve()
+        odev_home = self.odev.home_path.resolve()
 
-        # If we are in the home directory or a non-git subdirectory,
-        # use a playground to avoid exposing sensitive folders (Downloads, Documents, etc.)
-        if target_dir.as_posix().startswith(home.as_posix()):
-            odev_home = self.odev.home_path.resolve()
+        # The agent opens in the directory it was launched from, wherever that is, with
+        # three exceptions that would hand it a whole personal tree rather than one piece
+        # of work: the home directory itself, one of its standard top-level folders
+        # (Documents, Downloads, ...), and odev's own home - which, with the legacy
+        # layout, is the clone of odev itself. There, and whenever --sandbox is passed,
+        # the run falls back to a throwaway playground that exposes no personal folder.
+        in_odev_home = target_dir == odev_home or odev_home in target_dir.parents
+        is_home_root = target_dir == home or target_dir in home_root_folders(home)
 
-            # Check if we are inside a git repository
-            is_git = False
-            try:
-                curr = target_dir
-                while curr != curr.parent and curr.as_posix().startswith(home.as_posix()):
-                    if (curr / ".git").exists():
-                        # Not when that repository is odev's home: with the legacy layout,
-                        # ~/odev is both the clone of odev and the folder of its data, and
-                        # what the agent makes there lands in odev's own source tree.
-                        is_git = curr != odev_home
-                        break
-                    curr = curr.parent
-            except OSError as e:
-                logger.debug(f"Could not walk up from {target_dir} looking for a git repository: {e}")
-
-            if not is_git:
-                playground = self.odev.home_path / "playground"
-                playground.mkdir(parents=True, exist_ok=True)
-                logger.info(f"Using AI playground sandbox: {playground}")
-                return [str(playground)]
+        if self.args.sandbox or is_home_root or in_odev_home:
+            playground = self.odev.home_path / "playground"
+            playground.mkdir(parents=True, exist_ok=True)
+            logger.info(f"Using AI playground sandbox: {playground}")
+            return [str(playground)]
 
         return [str(target_dir)]
 
