@@ -417,7 +417,8 @@ class AICommandMixin:
         3. :attr:`sandbox_repository`, the checkout of the code the run is about, which
            a command resolved for itself - the only code a hosted database can offer,
            running nowhere local;
-        4. the directory the command was called from, when it is inside a repository;
+        4. the directory the command was called from, when it is inside a repository
+           other than odev's home directory;
         5. the playground, which exposes no personal folder to the agent.
         """
         if version:
@@ -446,13 +447,18 @@ class AICommandMixin:
         # If we are in the home directory or a non-git subdirectory,
         # use a playground to avoid exposing sensitive folders (Downloads, Documents, etc.)
         if target_dir.as_posix().startswith(home.as_posix()):
+            odev_home = self.odev.home_path.resolve()
+
             # Check if we are inside a git repository
             is_git = False
             try:
                 curr = target_dir
                 while curr != curr.parent and curr.as_posix().startswith(home.as_posix()):
                     if (curr / ".git").exists():
-                        is_git = True
+                        # Not when that repository is odev's home: with the legacy layout,
+                        # ~/odev is both the clone of odev and the folder of its data, and
+                        # what the agent makes there lands in odev's own source tree.
+                        is_git = curr != odev_home
                         break
                     curr = curr.parent
             except OSError as e:

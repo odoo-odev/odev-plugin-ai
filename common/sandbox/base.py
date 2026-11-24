@@ -14,6 +14,7 @@ import sys
 from abc import ABC, abstractmethod
 from collections import defaultdict
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 
 from odev.common import string
@@ -103,6 +104,74 @@ class Sandbox(OdevFrameworkMixin, ABC):
         Default: no extra note.
         """
         return None
+
+    #: Whether the agent's home is a temporary folder deleted at the end of the run
+    #: rather than the user's own. The agent is told so, and what it leaves there is
+    #: moved out with :meth:`_rescue_home_files` before the folder goes.
+    home_is_temporary: bool = False
+
+    # --- temporary home --------------------------------------------------------
+
+    @staticmethod
+    def _snapshot_files(root: Path) -> set[Path]:
+        """Return the paths of the files under ``root``, relative to it."""
+        return {
+            (Path(dirpath) / name).relative_to(root) for dirpath, _, filenames in os.walk(root) for name in filenames
+        }
+
+    def _rescue_home_files(self, home: Path, before: set[Path]) -> Path | None:
+        """Move the files the agent left in its temporary home to the playground.
+
+        A path that looks permanent, such as ``~/odoo/custom-addons``, is one an agent
+        writes to without suspecting that the whole home is deleted when the session
+        ends. Each such file is moved to ``<odev home>/playground/recovered-<date>/``
+        under the same relative path, so that what the agent made is not lost in silence.
+
+        Not kept: what was there before the agent started (``before``), what is hidden
+        at the top of the home (the state of the agent and of its tools, under ``.claude``,
+        ``.npm``, ``.config``…), symlinks, and the contents of ``node_modules`` and
+        ``__pycache__``, which are rebuilt rather than written.
+
+        :param home: The temporary folder mounted as the agent's home.
+        :param before: The files of ``home`` when the agent started, from :meth:`_snapshot_files`.
+        :return: The folder the files were moved to, or None if there were none.
+        """
+        strays: list[Path] = []
+        for dirpath, dirnames, filenames in os.walk(home):
+            current = Path(dirpath)
+            names = filenames
+            if current == home:
+                dirnames[:] = [d for d in dirnames if not d.startswith(".")]
+                names = [f for f in filenames if not f.startswith(".")]
+            dirnames[:] = [d for d in dirnames if d not in {"node_modules", "__pycache__"}]
+            for name in names:
+                path = current / name
+                rel = path.relative_to(home)
+                if rel not in before and not path.is_symlink() and path.is_file():
+                    strays.append(rel)
+
+        if not strays:
+            return None
+
+        target = self.odev.home_path / "playground" / f"recovered-{datetime.now():%Y%m%d-%H%M%S}"
+        moved: list[Path] = []
+        for rel in strays:
+            try:
+                (target / rel).parent.mkdir(parents=True, exist_ok=True)
+                shutil.move(home / rel, target / rel)
+                moved.append(rel)
+            except OSError as e:
+                logger.warning(f"Could not recover {rel} from the temporary home of the agent: {e}")
+
+        if not moved:
+            return None
+
+        tops = ", ".join(sorted({rel.parts[0] for rel in moved}))
+        logger.warning(
+            f"The agent saved {len(moved)} file(s) in its temporary home, which is deleted at the end of "
+            f"the session. They were moved to {target} ({tops})."
+        )
+        return target
 
     # --- shared helpers ------------------------------------------------------
 
