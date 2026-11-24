@@ -67,6 +67,9 @@ def _check_bwrap_support() -> tuple[bool, str]:
 class BwrapSandbox(Sandbox):
     """Linux sandbox backend using bwrap (bubblewrap)."""
 
+    # The playground is mounted over $HOME, and deleted with the rest after the run.
+    home_is_temporary = True
+
     @classmethod
     def check_support(cls) -> tuple[bool, str]:
         return _check_bwrap_support()
@@ -296,7 +299,7 @@ class BwrapSandbox(Sandbox):
 
     # --- main entry ----------------------------------------------------------
 
-    def execute(self, spec: ExecutionSpec) -> bool:  # noqa: PLR0912 - sequential argv assembly, splitting it would obscure the isolation logic
+    def execute(self, spec: ExecutionSpec) -> bool:  # noqa: PLR0912, PLR0915 - sequential argv assembly, splitting it would obscure the isolation logic
         """Translate the spec into a bwrap argv and execute the agent."""
         host_home = Path.home().resolve()
 
@@ -389,6 +392,7 @@ class BwrapSandbox(Sandbox):
         from odev.common import bash  # noqa: PLC0415 - deferred, importing it at module level cycles through odev
 
         returncode = 0
+        home_before = self._snapshot_files(spec.playground)
         try:
             # To prevent secrets (like API keys) from appearing in process listings (ps),
             # we write the bwrap arguments to a temporary protected file and pass them
@@ -420,6 +424,10 @@ class BwrapSandbox(Sandbox):
             returncode = 1
         finally:
             self._terminate_pg(spec.pg_process)
+            try:
+                self._rescue_home_files(spec.playground, home_before)
+            except Exception as e:  # noqa: BLE001 - a failed rescue must not keep the cleanup below from running
+                logger.warning(f"Could not look for files left in the temporary home of the agent: {e}")
             self._cleanup_paths([spec.playground, spec.sandbox_tmp, spec.proxy_dir, spec.pg_data_dir])
 
         return returncode == 0

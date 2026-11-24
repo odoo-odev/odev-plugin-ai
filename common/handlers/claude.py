@@ -36,6 +36,8 @@ compared against names that were built by something else.
 
 
 class ClaudeHandler(BaseAgentHandler):
+    system_prompt_flag = "--append-system-prompt"
+
     def get_config_dirs(self):
         return [".claude", ".config/claude"]
 

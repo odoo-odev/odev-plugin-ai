@@ -56,6 +56,11 @@ class BaseAgentHandler:
     answer: it reads its own store, and knows which of its sessions is resumable.
     """
 
+    #: The flag adding text to the system prompt of this agent, if it has one. The note
+    #: on the sandbox goes there when it can: it then reaches a session started without
+    #: a prompt, and every resumed one. Otherwise it is prefixed to the prompt.
+    system_prompt_flag: str | None = None
+
     def __init__(self, cli, host_home, odev):
         self.cli = cli
         self.host_home = host_home

@@ -242,13 +242,16 @@ class AgentCLI(OdevFrameworkMixin):
 
         resume = self._resolve_resume(resume, cwd)
 
-        # Only ever prefixed to a prompt there already is: handed to an agent started
-        # with nothing to do, the note becomes the first thing it is asked, and a run
-        # meant to open a conversation opens with the agent answering its own sandbox
-        # description instead of waiting. It used to be assembled after the command that
-        # carries the prompt was built, so it reached no agent at all.
-        if prompt:
-            prompt = self._environment_note(database) + prompt
+        # In the system prompt of an agent that has one, so that the note also reaches a
+        # session started without a prompt, and every resumed one. Otherwise only ever
+        # prefixed to a prompt there already is: handed to an agent started with nothing
+        # to do, the note becomes the first thing it is asked, and a run meant to open a
+        # conversation opens with the agent answering its own sandbox description
+        # instead of waiting.
+        note = self._environment_note(database, cwd, final_binds, host_home)
+        system_prompt_args = [self.handler.system_prompt_flag, note] if self.handler.system_prompt_flag else []
+        if not system_prompt_args and prompt:
+            prompt = f"(Environment: {note})\n\n{prompt}"
 
         agent_cmd, agent_dirs, agent_files = self._get_agent_setup(
             prompt, resume, all_candidate_paths, host_home, tuple(mcp_servers or ())
@@ -258,6 +261,7 @@ class AgentCLI(OdevFrameworkMixin):
             return False
 
         agent_cmd.extend(self.handler.get_mcp_config_args(mcp_config_path))
+        agent_cmd.extend(system_prompt_args)
 
         sandbox_path = self._build_sandbox_path(active_venv_path, host_home)
         env = self._build_env(host_home, sandbox_path, database)
@@ -295,21 +299,56 @@ class AgentCLI(OdevFrameworkMixin):
 
         return self.sandbox.execute(spec)
 
-    @staticmethod
-    def _environment_note(database: str | None) -> str:
-        """Return what the agent has to know about the sandbox it was started in."""
-        if database:
-            return (
-                f"(Environment: You have been granted access to a private, isolated PostgreSQL database "
-                f"named '{database}'. If the host database '{database}' exists, it has been cloned into "
-                "this ephemeral cluster. Otherwise it is an empty database. You can safely modify it as "
-                "it does not affect the live host data. Use 'psql' to work directly with it.)\n\n"
+    def _environment_note(
+        self,
+        database: str | None,
+        cwd: str,
+        final_binds: list[tuple[Path, Path, bool, bool]],
+        host_home: Path,
+    ) -> str:
+        """Return what the agent has to know about the sandbox it was started in.
+
+        Above all, where what it makes is kept. An agent cannot see that its home is a
+        temporary folder: told nothing, it saves a module in ``~/odoo/custom-addons``
+        because the path looks right, and the module is gone with the session.
+        """
+        kept = [dst for _, dst, ro, primary in final_binds if primary and not ro]
+        cwd_kept = any(Path(cwd) == dst for dst in kept)
+        others = [str(dst) for dst in kept if Path(cwd) != dst]
+
+        lines = ["You are running in an odev sandbox, an isolated copy of the user's environment."]
+
+        if cwd_kept:
+            lines.append(
+                f"Your working directory, {cwd}, is a folder of the user's machine: "
+                "what you write there is kept after this session."
+            )
+        if others:
+            lines.append(f"These folders of the user's machine are kept as well: {', '.join(others)}.")
+        if self.sandbox.home_is_temporary:
+            lines.append(
+                f"Your home directory ({host_home}) and /tmp are temporary: they are deleted when this "
+                "session ends. Never save there anything the user is meant to keep (a module, an "
+                "archive, an export, a report), even under a path that looks permanent such as "
+                "~/odoo/custom-addons."
+            )
+        if cwd_kept or others:
+            lines.append(
+                "Save what you make for the user in your working directory or one of the folders above, "
+                "and give them its full path."
             )
 
-        return (
-            "(Environment: You have been granted access to a private, isolated filesystem sandbox. "
-            "No database access has been provided for this session.)\n\n"
-        )
+        if database:
+            lines.append(
+                f"You have been granted access to a private, isolated PostgreSQL database named '{database}'. "
+                f"If the host database '{database}' exists, it has been cloned into this ephemeral cluster. "
+                "Otherwise it is an empty database. You can safely modify it as it does not affect the live "
+                "host data. Use 'psql' to work directly with it."
+            )
+        else:
+            lines.append("No database access has been provided for this session.")
+
+        return "\n".join(lines)
 
     def _resolve_resume(self, resume: str | None, cwd: str | None) -> str | None:
         """Turn a request to resume "latest" into the id of an actual session.
