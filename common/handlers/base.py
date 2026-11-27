@@ -122,6 +122,16 @@ class BaseAgentHandler:
         """
         return
 
+    def update_command(self) -> list[str] | None:
+        """Return the argv that updates this agent's CLI in place, to run on the host.
+
+        The agent runs inside a network-isolated sandbox whose copy of the install is
+        read-only, so it can never update itself there. odev runs this on the host before
+        entering the sandbox instead. The default is None: this agent has no known in-place
+        update command, so the check is skipped rather than guessed at.
+        """
+        return None
+
     def get_command(self, prompt, resume, all_candidate_paths, model, headless, yolo, mcp_server_names=()):  # noqa: PLR0913 - every agent needs the full invocation context
         """Build the command line for the agent."""
         raise NotImplementedError
