@@ -10,6 +10,8 @@ if TYPE_CHECKING:
     from odev.common.odev import Odev
 
 import shutil
+import subprocess
+from datetime import datetime
 from pathlib import Path
 
 from odev.common import args
@@ -25,6 +27,13 @@ from odev.plugins.odev_plugin_ai.common.skills import ensure_skills
 
 
 logger = logging.getLogger(__name__)
+
+CLI_UPDATE_TIMEOUT = 180
+"""Seconds a host-side CLI update may take before it is given up on.
+
+Downloading and installing a release can take a while on a slow connection, but it must
+not hold a launch hostage: past this, the already-installed CLI runs as it is.
+"""
 
 GUIDELINES_SKILL = "odoo_coding_guidelines"
 """Skill carrying how Odoo code is written: module layout, per-language conventions, and
@@ -290,13 +299,56 @@ class AICommandMixin:
         self._ensure_cli_installed(final_cli)
         final_model = self._resolve_model(final_cli)
 
-        return AgentCLI(
+        agent = AgentCLI(
             cli=final_cli,
             model=final_model,
             yolo=self.args.yolo,
             headless=self.args.headless,
             edit=self.args.edit,
         )
+        self._auto_update_cli(agent, final_cli)
+        return agent
+
+    def _auto_update_cli(self, agent: AgentCLI, cli: str) -> None:
+        """Update the agent CLI on the host before it runs sandboxed, when due.
+
+        The sandbox has no network and its copy of the install is read-only, so the agent
+        can never update itself from inside it. odev does it here instead - on the host,
+        where the install and the network are - so a run always starts on the latest CLI.
+
+        Throttled per CLI (see `ai.update_interval`) so a launch does not pay for a network
+        round-trip every time, and best-effort: an update that is offline, slow or failing
+        must never stop a run that the installed CLI can already serve.
+        """
+        if not self.config.ai.is_update_needed(cli):
+            return
+
+        cmd = agent.handler.update_command()
+        if not cmd:
+            return
+
+        logger.info(f"Checking for a '{cli}' update (it cannot update itself inside the sandbox)...")
+        try:
+            result = subprocess.run(  # noqa: S603 - argv built from the handler, no shell
+                cmd, capture_output=True, text=True, timeout=CLI_UPDATE_TIMEOUT, check=False
+            )
+        except (OSError, subprocess.SubprocessError) as e:
+            # A missing binary, a crash or a timeout: the installed CLI still runs, so this
+            # is noted and stepped over, not raised. The date is left untouched so the next
+            # launch retries rather than waiting out the whole interval on a transient error.
+            logger.debug(f"Could not check for a '{cli}' update: {e}")
+            return
+
+        # Record the attempt whether or not a new version was found: a check that ran and
+        # reported "up to date" is still a check, and the throttle counts checks, not updates.
+        self.config.ai.set_update_date(cli, datetime.now())
+
+        output = (result.stdout or result.stderr or "").strip()
+        if result.returncode != 0:
+            logger.debug(f"The '{cli}' update check exited {result.returncode}: {output or '(no output)'}")
+            return
+
+        logger.debug(f"The '{cli}' update check reported: {output or '(no output)'}")
 
     def _database_has_demo(self, database_obj) -> bool:
         """Return True if the database has demo data installed."""

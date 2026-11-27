@@ -179,6 +179,12 @@ class ClaudeHandler(BaseAgentHandler):
 
         return None
 
+    def update_command(self):
+        # The real binary, not an installer's `odev ai` wrapper on PATH; `claude update`
+        # checks for a new version and installs it through whatever installed Claude Code
+        # (its own native installer or the package manager).
+        return [which_agent("claude") or "claude", "update"]
+
     def get_command(self, prompt, resume, all_candidate_paths, model, headless, yolo, mcp_server_names=()):  # noqa: PLR0913 - signature set by BaseAgentHandler
         # The real binary by its absolute path: the sandbox PATH has ~/.local/bin ahead
         # of /usr/bin, where installers may have put a `claude` wrapper running odev.

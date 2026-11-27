@@ -3,7 +3,7 @@ from pathlib import Path
 
 from odev.common.logging import logging
 
-from .base import BaseAgentHandler
+from .base import BaseAgentHandler, which_agent
 
 
 logger = logging.getLogger(__name__)
@@ -69,6 +69,11 @@ class AgyHandler(BaseAgentHandler):
             logger.info(f"Linked {link} -> {target} so Antigravity can discover installed skills.")
         except OSError as e:
             logger.warning(f"Could not set up the Antigravity skills symlink: {e}")
+
+    def update_command(self):
+        # The real binary, not an installer's `odev ai` wrapper on PATH; `agy update`
+        # updates the Antigravity CLI in place.
+        return [which_agent("agy") or "agy", "update"]
 
     def get_command(self, prompt, resume, all_candidate_paths, model, headless, yolo, mcp_server_names=()):  # noqa: PLR0913 - signature set by BaseAgentHandler
         home = Path.home()

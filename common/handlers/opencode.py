@@ -22,6 +22,13 @@ class OpenCodeHandler(ClaudeHandler):
         """
         return
 
+    def update_command(self):
+        # OpenCode is not Claude Code: its own binary, and `upgrade` rather than `update`.
+        opencode_bin = self.host_home / ".opencode/bin/opencode"
+        if not opencode_bin.exists():
+            return None
+        return [str(opencode_bin), "upgrade"]
+
     def get_command(self, prompt, resume, all_candidate_paths, model, headless, yolo, mcp_server_names=()):  # noqa: PLR0913 - signature set by BaseAgentHandler
         opencode_bin = self.host_home / ".opencode/bin/opencode"
         if not opencode_bin.exists():
