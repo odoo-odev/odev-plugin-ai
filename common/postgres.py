@@ -22,6 +22,15 @@ _ORPHAN_DIR_PREFIX = "odev-ai-"
 _ORPHAN_MIN_AGE_SECONDS = 5 * 60
 
 
+# Bootstrap superuser of the ephemeral cluster. It is kept apart from the host
+# user's role on purpose: recent Odoo refuses to run when its own PostgreSQL role
+# is a superuser (a superuser can run OS commands and read/write files as the
+# postgres system user, which would defeat the sandbox). So the cluster's lone
+# superuser is `postgres`, used only for admin, and the host user gets a separate
+# NOSUPERUSER / CREATEDB login role that Odoo connects as.
+_BOOTSTRAP_SUPERUSER = "postgres"
+
+
 class PostgresSandbox(OdevFrameworkMixin):
     """Manages an ephemeral PostgreSQL sandbox database."""
 
@@ -288,12 +297,53 @@ class PostgresSandbox(OdevFrameworkMixin):
             logger.warning(f"Database {database!r} creation failed: {e}")
             return False
 
+    def _create_app_role(self, socket_dir: Path, user: str) -> bool:
+        """Create the host user's login role, deliberately without superuser.
+
+        Odoo connects to the cluster as this role and refuses to run if it is a
+        superuser, so the role is NOSUPERUSER; CREATEDB lets the agent still create
+        more databases through it. The bootstrap `postgres` role stays the cluster's
+        only superuser, used solely for administration.
+        """
+        if user == _BOOTSTRAP_SUPERUSER:
+            # The host user is literally `postgres`: it already is the bootstrap
+            # superuser, and there is no separate role to create or demote.
+            logger.warning(
+                f"Host user is {_BOOTSTRAP_SUPERUSER!r}; the ephemeral cluster's role will be a "
+                "superuser, which recent Odoo versions refuse to run as."
+            )
+            return False
+        try:
+            subprocess.run(
+                [
+                    self._get_pg_bin("psql"),
+                    "-h",
+                    str(socket_dir),
+                    "-p",
+                    "5432",
+                    "-U",
+                    _BOOTSTRAP_SUPERUSER,
+                    "-d",
+                    "postgres",
+                    "-c",
+                    f'CREATE ROLE "{user}" WITH LOGIN CREATEDB;',
+                ],
+                check=True,
+                capture_output=True,
+            )
+            return True
+        except Exception as e:
+            logger.warning(f"Could not create login role {user!r}: {e}")
+            return False
+
     def _start_ephemeral_postgres(self, socket_dir: Path, data_dir: Path) -> subprocess.Popen | None:
         """Initialize and start an ephemeral PostgreSQL cluster."""
         try:
             if not self.headless:
                 logger.info(f"Initializing ephemeral PostgreSQL cluster in {data_dir}")
-            # Use current host user as superuser so psql works without -U
+            # The cluster's bootstrap superuser is `postgres`; the host user gets a
+            # separate NOSUPERUSER role below. Odoo refuses to run as a superuser, so
+            # it must connect as that non-privileged role, not as the bootstrap one.
             user = Path.home().name
             subprocess.run(
                 [
@@ -302,7 +352,7 @@ class PostgresSandbox(OdevFrameworkMixin):
                     str(data_dir),
                     "--nosync",
                     "-U",
-                    user,
+                    _BOOTSTRAP_SUPERUSER,
                     "--auth=trust",
                     "--encoding=UTF8",
                     "--locale=C",
@@ -352,6 +402,10 @@ class PostgresSandbox(OdevFrameworkMixin):
                 process.terminate()
                 return None
 
+            # Give the host user a NOSUPERUSER / CREATEDB login role so Odoo, which
+            # connects as it, is not a superuser. Then create the databases owned by
+            # it (psql without -U then connects as this role, as before).
+            self._create_app_role(socket_dir, user)
             self._create_database(socket_dir, user, user)
             self._create_database(socket_dir, user, "odev")
 
